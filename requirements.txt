@@ -1,0 +1,4 @@
+aiogram>=3.28.2
+aiohttp-socks>=0.11.0
+python-dotenv>=1.2.2
+reportlab>=4.5.0
