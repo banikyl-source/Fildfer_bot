@@ -22,76 +22,13 @@ FONT_BOLD = "Receipt17Sans-Bold"
 FONT_RUBLE = "Receipt17Ruble"
 FONT_RUBLE_BOLD = "Receipt17Ruble-Bold"
 FONT_FALLBACK = "Receipt17Fallback"
+
+# Папка с ресурсами – относительно этого файла
 ASSET_DIR = Path(__file__).parent / "assets"
 FONT_DIR = ASSET_DIR / "fonts"
 RECEIPT17_ASSET_DIR = ASSET_DIR / "receipt17"
 LOGO_PATH = RECEIPT17_ASSET_DIR / "logo.png"
 STAMP_PATH = RECEIPT17_ASSET_DIR / "stamp.png"
-
-_FONT_CANDIDATES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    (
-        FONT_REGULAR,
-        (
-            str(FONT_DIR / "TinkoffSans-Regular-full.ttf"),
-            str(FONT_DIR / "TinkoffSans-Regular.otf"),
-            str(FONT_DIR / "TinkoffSans-Regular-reportlab.ttf"),
-            str(FONT_DIR / "TinkoffSans-Regular.ttf"),
-            "~/AppData/Local/Microsoft/Windows/Fonts/Roboto-Regular.ttf",
-            "~/AppData/Local/Microsoft/Windows/Fonts/NotoSans-Regular.ttf",
-            "C:/Windows/Fonts/arial.ttf",
-            "C:/Windows/Fonts/segoeui.ttf",
-            "/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Regular.ttf",
-            "/usr/share/fonts/truetype/roboto/Roboto-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        ),
-    ),
-    (
-        FONT_BOLD,
-        (
-            str(FONT_DIR / "TinkoffSans-Medium-full.ttf"),
-            str(FONT_DIR / "TinkoffSans-Medium.otf"),
-            str(FONT_DIR / "TinkoffSans-Medium-reportlab.ttf"),
-            str(FONT_DIR / "TinkoffSans-Medium.ttf"),
-            "~/AppData/Local/Microsoft/Windows/Fonts/Roboto-Bold.ttf",
-            "~/AppData/Local/Microsoft/Windows/Fonts/NotoSans-Bold.ttf",
-            "C:/Windows/Fonts/arialbd.ttf",
-            "C:/Windows/Fonts/segoeuib.ttf",
-            "/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Bold.ttf",
-            "/usr/share/fonts/truetype/roboto/Roboto-Bold.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        ),
-    ),
-    (
-        FONT_RUBLE,
-        (
-            str(FONT_DIR / "ALSRubl-reportlab.ttf"),
-            str(FONT_DIR / "ALSRubl.ttf"),
-            str(FONT_DIR / "TinkoffSans-Regular.ttf"),
-            "C:/Windows/Fonts/arial.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        ),
-    ),
-    (
-        FONT_RUBLE_BOLD,
-        (
-            str(FONT_DIR / "ALSRubl-reportlab.ttf"),
-            str(FONT_DIR / "ALSRubl.ttf"),
-            str(FONT_DIR / "TinkoffSans-Medium.ttf"),
-            "C:/Windows/Fonts/arialbd.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        ),
-    ),
-    (
-        FONT_FALLBACK,
-        (
-            "C:/Windows/Fonts/segoeui.ttf",
-            "C:/Windows/Fonts/arial.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        ),
-    ),
-)
 
 _fonts_registered = False
 
@@ -100,14 +37,22 @@ def _ensure_fonts_registered() -> None:
     global _fonts_registered
     if _fonts_registered:
         return
-    for name, candidates in _FONT_CANDIDATES:
-        for path in candidates:
-            candidate = Path(path).expanduser()
-            if candidate.exists():
-                pdfmetrics.registerFont(TTFont(name, str(candidate)))
-                break
-        else:
-            raise RuntimeError(f"Font {name} not found.")
+
+    # Явные пути к шрифтам Tinkoff Sans (только из assets/fonts)
+    regular_path = FONT_DIR / "TinkoffSans-Regular.ttf"
+    medium_path = FONT_DIR / "TinkoffSans-Medium.ttf"
+
+    if not regular_path.exists():
+        raise RuntimeError(f"Шрифт не найден: {regular_path}")
+    if not medium_path.exists():
+        raise RuntimeError(f"Шрифт не найден: {medium_path}")
+
+    pdfmetrics.registerFont(TTFont(FONT_REGULAR, str(regular_path)))
+    pdfmetrics.registerFont(TTFont(FONT_BOLD, str(medium_path)))
+    pdfmetrics.registerFont(TTFont(FONT_RUBLE, str(regular_path)))       # для обычного рубля – обычный шрифт
+    pdfmetrics.registerFont(TTFont(FONT_RUBLE_BOLD, str(medium_path)))   # для жирного рубля – жирный
+    pdfmetrics.registerFont(TTFont(FONT_FALLBACK, str(regular_path)))    # запасной – тоже обычный
+
     _fonts_registered = True
 
 
@@ -294,6 +239,26 @@ def _draw_right(c: canvas.Canvas, y: float, value: str, size: float = VALUE_SIZE
     _draw_right_text(c, RIGHT_X, y, value.strip() or "—", FONT_REGULAR, size)
 
 
+def _draw_bold_ruble(
+    c: canvas.Canvas,
+    x: float,
+    y: float,
+    text: str,
+    font_name: str,
+    size: float,
+) -> None:
+    c.saveState()
+    c.setFillColor(COLOR_TEXT)
+    c.setStrokeColor(COLOR_TEXT)
+    c.setLineWidth(size / 30.0)
+    text_obj = c.beginText(x, y)
+    text_obj.setFont(font_name, size)
+    text_obj.setTextRenderMode(2)  # fill+stroke (жирный эффект)
+    text_obj.textOut(text)
+    c.drawText(text_obj)
+    c.restoreState()
+
+
 def _draw_money_right(
     c: canvas.Canvas,
     y: float,
@@ -303,7 +268,7 @@ def _draw_money_right(
     bold: bool,
 ) -> None:
     amount = value.strip().removesuffix("₽").rstrip()
-    ruble = "i"
+    ruble = "i"  # оригинальный символ‑заглушка
     amount_font = FONT_BOLD if bold else FONT_REGULAR
     ruble_font = FONT_RUBLE_BOLD if bold else FONT_RUBLE
     ruble_width = c.stringWidth(ruble, ruble_font, size)
@@ -319,26 +284,6 @@ def _draw_money_right(
         c.drawString(start_x + amount_width, y, ruble)
 
 
-def _draw_bold_ruble(
-    c: canvas.Canvas,
-    x: float,
-    y: float,
-    text: str,
-    font_name: str,
-    size: float,
-) -> None:
-    c.saveState()
-    c.setFillColor(COLOR_TEXT)
-    c.setStrokeColor(COLOR_TEXT)
-    c.setLineWidth(size / 30.0)
-    text_obj = c.beginText(x, y)
-    text_obj.setFont(font_name, size)
-    text_obj.setTextRenderMode(2)
-    text_obj.textOut(text)
-    c.drawText(text_obj)
-    c.restoreState()
-
-
 def _draw_pair(c: canvas.Canvas, y: float, label: str, value: str) -> None:
     c.setFillColor(COLOR_TEXT)
     _draw_text(c, MARGIN_X, y, label, FONT_REGULAR, LABEL_SIZE)
@@ -350,7 +295,7 @@ def _draw_watermark(c: canvas.Canvas) -> None:
     c.translate(PAGE_WIDTH / 2, PAGE_HEIGHT / 2)
     c.rotate(35)
     c.setFillColor(COLOR_WATERMARK)
-    text = ""
+    text = ""  # пустая строка – нет водяного знака
     c.setFont(_font_for_text(FONT_BOLD, text), WATERMARK_SIZE)
     text_width = c.stringWidth(text, FONT_BOLD, WATERMARK_SIZE)
     half = int(PAGE_HEIGHT / WATERMARK_SPACING) + 1
@@ -361,7 +306,7 @@ def _draw_watermark(c: canvas.Canvas) -> None:
 
 def _draw_disclaimer(c: canvas.Canvas) -> None:
     c.setFillColor(COLOR_DISCLAIMER)
-    text = ""
+    text = ""  # пустая строка – нет дисклеймера
     c.setFont(_font_for_text(FONT_BOLD, text), 7.0)
     c.drawCentredString(
         PAGE_WIDTH / 2,
