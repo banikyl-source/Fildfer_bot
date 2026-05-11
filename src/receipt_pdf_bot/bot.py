@@ -1,538 +1,468 @@
-"""Telegram bot front-end for the demo receipt generator.
+"""Separate demo template based on receipt_17.03.2026.pdf.
 
-The bot guides the user through a step-by-step FSM dialog, collects every
-field, and replies with a watermarked demo PDF. Two input modes are
-supported:
-
-  * `/new` — step-by-step questions (default, easiest)
-  * `/quick` — paste all fields in one message in `key: value` format
+This module is intentionally independent from receipt.py. It renders a
+sample-watermarked demo receipt layout and is not wired into the bot by
+default.
 """
 
 from __future__ import annotations
 
-import logging
-import os
-import ssl
-from typing import Any
+from dataclasses import dataclass
+from io import BytesIO
+from pathlib import Path
 
-from aiogram import Bot, Dispatcher, F, Router
-from aiogram.client.default import DefaultBotProperties
-from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.enums import ParseMode
-from aiogram.filters import Command, CommandStart
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BufferedInputFile, Message
-from dotenv import load_dotenv
+from reportlab.lib.colors import Color, HexColor
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfgen import canvas
 
-from receipt_pdf_bot.receipt import ReceiptData, render_receipt_pdf
-from receipt_pdf_bot.receipt_17_03_2026_template import (
-    Receipt17Data,
-    render_receipt_17_pdf,
-)
+FONT_REGULAR = "Receipt17Sans"
+FONT_BOLD = "Receipt17Sans-Bold"
+FONT_RUBLE = "Receipt17Ruble"
+FONT_RUBLE_BOLD = "Receipt17Ruble-Bold"
+FONT_FALLBACK = "Receipt17Fallback"
+ASSET_DIR = Path(__file__).parent / "assets"
+FONT_DIR = ASSET_DIR / "fonts"
+RECEIPT17_ASSET_DIR = ASSET_DIR / "receipt17"
+LOGO_PATH = RECEIPT17_ASSET_DIR / "logo.png"
+STAMP_PATH = RECEIPT17_ASSET_DIR / "stamp.png"
 
-logger = logging.getLogger(__name__)
-
-router = Router()
-
-
-class FillReceipt(StatesGroup):
-    template = State()
-    datetime_text = State()
-    operation = State()
-    recipient_name = State()
-    recipient_card = State()
-    recipient_bank = State()
-    sender_name = State()
-    sender_account = State()
-    amount = State()
-    fee = State()
-    document_number = State()
-    auth_code = State()
-
-
-_FIELD_ORDER: tuple[tuple[State, str, str], ...] = (
+_FONT_CANDIDATES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
-        FillReceipt.datetime_text,
-        "datetime_text",
-        "<b>Шаг 1/10.</b> Введите дату и время операции.\n"
-        "Например: <code>5 апреля 2026 20:29:42 (МСК)</code>\n"
-        "(или отправьте «-», чтобы оставить прочерк)",
-    ),
-    (
-        FillReceipt.operation,
-        "operation",
-        "<b>Шаг 2/10.</b> Название операции.\n"
-        "Например: <code>Перевод клиенту</code>, <code>Оплата услуг</code>",
-    ),
-    (
-        FillReceipt.recipient_name,
-        "recipient_name",
-        "<b>Шаг 3/10.</b> ФИО получателя.\n"
-        "Например: <code>Даниил Андреевич З.</code>",
-    ),
-    (
-        FillReceipt.recipient_card,
-        "recipient_card",
-        "<b>Шаг 4/10.</b> Карта или телефон получателя.\n"
-        "Например: <code>**** 0264</code> или <code>+7 999 000-00-00</code>",
-    ),
-    (
-        FillReceipt.recipient_bank,
-        "recipient_bank",
-        "<b>Шаг 5/11.</b> Банк получателя.\n"
-        "Например: <code>Яндекс</code>",
-    ),
-    (
-        FillReceipt.sender_name,
-        "sender_name",
-        "<b>Шаг 5/10.</b> ФИО отправителя.\n"
-        "Например: <code>Артём Анатольевич М.</code>",
-    ),
-    (
-        FillReceipt.sender_account,
-        "sender_account",
-        "<b>Шаг 6/10.</b> Счёт отправителя.\n"
-        "Например: <code>**** 0220</code>",
-    ),
-    (
-        FillReceipt.amount,
-        "amount",
-        "<b>Шаг 7/10.</b> Сумма перевода.\n"
-        "Например: <code>259,00 ₽</code>",
-    ),
-    (
-        FillReceipt.fee,
-        "fee",
-        "<b>Шаг 8/10.</b> Комиссия.\n"
-        "Например: <code>0,00 ₽</code>",
-    ),
-    (
-        FillReceipt.document_number,
-        "document_number",
-        "<b>Шаг 9/10.</b> Номер документа.\n"
-        "Например: <code>1000000004428252091</code>",
-    ),
-    (
-        FillReceipt.auth_code,
-        "auth_code",
-        "<b>Шаг 10/10.</b> Код авторизации.\n"
-        "Например: <code>760646</code>",
-    ),
-)
-_NEXT_PROMPT: dict[str, str] = {state.state: prompt for state, _, prompt in _FIELD_ORDER}
-_FIELD_BY_STATE: dict[str, str] = {
-    state.state: field_name for state, field_name, _ in _FIELD_ORDER
-}
-_NEXT_STATE: dict[str, State | None] = {
-    state.state: _FIELD_ORDER[i + 1][0] if i + 1 < len(_FIELD_ORDER) else None
-    for i, (state, _, _) in enumerate(_FIELD_ORDER)
-}
-
-TEMPLATE_CLASSIC = "classic"
-TEMPLATE_17 = "receipt_17"
-
-_TEMPLATE_CHOICES: dict[str, str] = {
-    "1": TEMPLATE_CLASSIC,
-    "classic": TEMPLATE_CLASSIC,
-    "старый": TEMPLATE_CLASSIC,
-    "обычный": TEMPLATE_CLASSIC,
-    "2": TEMPLATE_17,
-    "17": TEMPLATE_17,
-    "receipt_17": TEMPLATE_17,
-    "новый": TEMPLATE_17,
-}
-
-_TEMPLATE_NAMES: dict[str, str] = {
-    TEMPLATE_CLASSIC: "Шаблон 1: чек по операции",
-    TEMPLATE_17: "Шаблон 2: квитанция 17.03",
-}
-
-_RECEIPT_DATA_FIELDS = set(ReceiptData.__dataclass_fields__)
-
-_TEMPLATE_17_DEFAULTS = Receipt17Data()
-_TEMPLATE_17_FIELD_HINTS: dict[str, tuple[str, str]] = {
-    "datetime_text": ("Дата и время", _TEMPLATE_17_DEFAULTS.datetime_text),
-    "operation": ("Тип перевода", _TEMPLATE_17_DEFAULTS.transfer_type),
-    "recipient_name": ("Получатель", _TEMPLATE_17_DEFAULTS.recipient_name),
-    "recipient_card": ("Телефон получателя", _TEMPLATE_17_DEFAULTS.recipient_phone),
-    "recipient_bank": ("Банк получателя", _TEMPLATE_17_DEFAULTS.recipient_bank),
-    "sender_name": ("Отправитель", _TEMPLATE_17_DEFAULTS.sender_name),
-    "sender_account": ("Счёт списания", _TEMPLATE_17_DEFAULTS.debit_account),
-    "amount": ("Сумма", _TEMPLATE_17_DEFAULTS.amount),
-    "fee": ("Комиссия", _TEMPLATE_17_DEFAULTS.fee),
-    "document_number": (
-        "Идентификатор операции",
-        _TEMPLATE_17_DEFAULTS.operation_id_line_1,
-    ),
-    "auth_code": ("Код/окончание идентификатора", _TEMPLATE_17_DEFAULTS.operation_id_line_2),
-}
-
-
-_QUICK_KEYS: dict[str, str] = {
-    # field name -> set of accepted keys (lowercased)
-    "datetime_text": "datetime_text",
-    "дата": "datetime_text",
-    "datetime": "datetime_text",
-    "operation": "operation",
-    "операция": "operation",
-    "recipient_name": "recipient_name",
-    "получатель": "recipient_name",
-    "фио_получателя": "recipient_name",
-    "recipient_card": "recipient_card",
-    "карта": "recipient_card",
-    "карта_получателя": "recipient_card",
-    "телефон": "recipient_card",
-    "телефон_получателя": "recipient_card",
-    "recipient_bank": "recipient_bank",
-    "банк": "recipient_bank",
-    "банк_получателя": "recipient_bank",
-    "sender_name": "sender_name",
-    "отправитель": "sender_name",
-    "фио_отправителя": "sender_name",
-    "sender_account": "sender_account",
-    "счёт": "sender_account",
-    "счет": "sender_account",
-    "amount": "amount",
-    "сумма": "amount",
-    "fee": "fee",
-    "комиссия": "fee",
-    "document_number": "document_number",
-    "номер_документа": "document_number",
-    "номер": "document_number",
-    "auth_code": "auth_code",
-    "код": "auth_code",
-    "код_авторизации": "auth_code",
-    "template": "template_id",
-    "шаблон": "template_id",
-}
-
-
-_DEMO_BANNER = (
-    "Бот выдаёт <b>демонстрационный PDF с водяным знаком ОБРАЗЕЦ</b>. "
-    "Документ не является платёжным и не имеет юридической силы. "
-    "Использование сгенерированных файлов для введения третьих лиц "
-    "в заблуждение запрещено."
-)
-
-
-def _normalize_value(text: str) -> str:
-    text = text.strip()
-    return "" if text in {"-", "—", "_"} else text
-
-
-def _allowed_user(user_id: int) -> bool:
-    raw = os.getenv("ALLOWED_USER_IDS", "").strip()
-    if not raw:
-        return True
-    allow = {int(x) for x in raw.replace(",", " ").split() if x.strip().isdigit()}
-    return user_id in allow
-
-
-@router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    if not _allowed_user(message.from_user.id):
-        await message.answer("Бот ограничен списком пользователей.")
-        return
-    await message.answer(
-        f"Привет! {_DEMO_BANNER}\n\n"
-        "Команды:\n"
-        "/new — заполнить чек по шагам\n"
-        "/quick — отправить все поля одним сообщением\n"
-        "/templates — список шаблонов\n"
-        "/cancel — отменить текущее заполнение\n"
-        "/help — справка"
-    )
-
-
-@router.message(Command("help"))
-async def cmd_help(message: Message) -> None:
-    await message.answer(
-        f"{_DEMO_BANNER}\n\n"
-        "<b>Пошаговый режим:</b> /new — бот по очереди спросит каждое поле.\n\n"
-        "<b>Быстрый режим:</b> /quick, потом одно сообщение в формате\n"
-        "<code>дата: 5 апреля 2026 20:29:42 (МСК)\n"
-        "шаблон: 1\n"
-        "операция: Перевод клиенту\n"
-        "получатель: Иван И.\n"
-        "карта: **** 1234\n"
-        "банк: Яндекс\n"
-        "отправитель: Пётр П.\n"
-        "счёт: **** 5678\n"
-        "сумма: 259,00 ₽\n"
-        "комиссия: 0,00 ₽\n"
-        "номер: 1000000004428252091\n"
-        "код: 760646</code>\n\n"
-        "Любое поле можно пропустить (просто не указывайте ключ или "
-        "напишите «-»).\n\n"
-        "<b>Шаблоны:</b> <code>1</code> — чек по операции, "
-        "<code>2</code> — квитанция 17.03."
-    )
-
-
-@router.message(Command("cancel"))
-async def cmd_cancel(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    await message.answer("Отменено. /new — начать заново.")
-
-
-def _template_prompt() -> str:
-    return (
-        "<b>Выберите шаблон:</b>\n"
-        "<code>1</code> — чек по операции\n"
-        "<code>2</code> — квитанция 17.03\n\n"
-        "Отправьте цифру шаблона."
-    )
-
-
-@router.message(Command("templates"))
-async def cmd_templates(message: Message) -> None:
-    await message.answer(_template_prompt())
-
-
-def _prompt_for_state(state: State, template_id: str) -> str:
-    visible_steps = _field_order_for_template(template_id)
-    if template_id != TEMPLATE_17:
-        return _NEXT_PROMPT[state.state]
-
-    field_name = _FIELD_BY_STATE[state.state]
-    label, default = _TEMPLATE_17_FIELD_HINTS[field_name]
-    step_number = next(
-        i for i, field_state in enumerate(visible_steps, start=1)
-        if field_state.state == state.state
-    )
-    return (
-        f"<b>Шаг {step_number}/{len(visible_steps)}.</b> {label}.\n"
-        f"По умолчанию: <code>{default}</code>\n"
-        "Отправьте новое значение или <code>-</code>, чтобы оставить как в образце."
-    )
-
-
-def _field_order_for_template(template_id: str) -> tuple[State, ...]:
-    states = tuple(state for state, _, _ in _FIELD_ORDER)
-    if template_id == TEMPLATE_17:
-        return states
-    return tuple(state for state in states if state != FillReceipt.recipient_bank)
-
-
-def _next_state_for_template(current_state: str, template_id: str) -> State | None:
-    states = _field_order_for_template(template_id)
-    for i, state in enumerate(states):
-        if state.state == current_state:
-            return states[i + 1] if i + 1 < len(states) else None
-    return None
-
-
-@router.message(Command("new"))
-async def cmd_new(message: Message, state: FSMContext) -> None:
-    if not _allowed_user(message.from_user.id):
-        return
-    await state.clear()
-    await state.update_data(values={})
-    await state.set_state(FillReceipt.template)
-    await message.answer(_template_prompt())
-
-
-async def _start_field_flow(
-    message: Message,
-    state: FSMContext,
-    template_id: str,
-) -> None:
-    first_state, _, _ = _FIELD_ORDER[0]
-    await state.update_data(template_id=template_id, values={})
-    await state.set_state(first_state)
-    await message.answer(
-        f"Выбран: <b>{_TEMPLATE_NAMES[template_id]}</b>.\n\n"
-        f"{_prompt_for_state(first_state, template_id)}"
-    )
-
-
-async def _handle_template_choice(message: Message, state: FSMContext) -> None:
-    text = (message.text or "").strip().lower()
-    template_id = _TEMPLATE_CHOICES.get(text)
-    if template_id is not None:
-        await _start_field_flow(message, state, template_id)
-        return
-
-    # Compatibility: if user starts entering fields immediately after /new,
-    # treat that message as the first field for the classic template.
-    first_state, field_name, _ = _FIELD_ORDER[0]
-    next_state = _next_state_for_template(first_state.state, TEMPLATE_CLASSIC)
-    values = {field_name: _normalize_value(message.text or "")}
-    await state.update_data(template_id=TEMPLATE_CLASSIC, values=values)
-    if next_state is None:
-        await _finalize(message, state, values)
-        return
-    await state.set_state(next_state)
-    await message.answer(_prompt_for_state(next_state, TEMPLATE_CLASSIC))
-
-
-async def _handle_step(message: Message, state: FSMContext) -> None:
-    current = await state.get_state()
-    if current is None or current not in _FIELD_BY_STATE:
-        return
-    field_name = _FIELD_BY_STATE[current]
-    data = await state.get_data()
-
-    # /quick mode is handled in fallback_text below; here we are in step mode.
-    if data.get("quick_mode"):
-        return
-
-    values: dict[str, Any] = data.get("values", {})
-    values[field_name] = _normalize_value(message.text or "")
-    await state.update_data(values=values)
-
-    template_id = data.get("template_id", TEMPLATE_CLASSIC)
-    next_state = _next_state_for_template(current, template_id)
-    if next_state is None:
-        await _finalize(message, state, values)
-        return
-    await state.set_state(next_state)
-    await message.answer(_prompt_for_state(next_state, template_id))
-
-
-@router.message(Command("quick"))
-async def cmd_quick(message: Message, state: FSMContext) -> None:
-    if not _allowed_user(message.from_user.id):
-        return
-    await state.clear()
-    await message.answer(
-        "Отправьте одним сообщением поля в формате <code>ключ: значение</code> "
-        "(каждое с новой строки). См. /help для примера. "
-        "Любое поле можно пропустить. Шаблон можно указать так: "
-        "<code>шаблон: 2</code>."
-    )
-    await state.update_data(quick_mode=True)
-
-
-async def _finalize(
-    message: Message, state: FSMContext, values: dict[str, Any]
-) -> None:
-    state_data = await state.get_data()
-    raw_template = values.pop("template_id", None) or state_data.get("template_id")
-    template_id = _resolve_template_id(raw_template)
-    pdf_bytes, filename = _render_template_pdf(values, template_id)
-    await message.answer_document(
-        BufferedInputFile(pdf_bytes, filename=filename),
-        caption=(
-            f"Готово: <b>{_TEMPLATE_NAMES[template_id]}</b>. "
-            "Это <b>ОБРАЗЕЦ</b> — демонстрационный документ "
-            "с водяным знаком. Не является платёжным документом."
+        FONT_REGULAR,
+        (
+            str(FONT_DIR / "TinkoffSans-Regular-full.ttf"),
+            str(FONT_DIR / "TinkoffSans-Regular.otf"),
+            str(FONT_DIR / "TinkoffSans-Regular-reportlab.ttf"),
+            str(FONT_DIR / "TinkoffSans-Regular.ttf"),
+            "~/AppData/Local/Microsoft/Windows/Fonts/Roboto-Regular.ttf",
+            "~/AppData/Local/Microsoft/Windows/Fonts/NotoSans-Regular.ttf",
+            "C:/Windows/Fonts/arial.ttf",
+            "C:/Windows/Fonts/segoeui.ttf",
+            "/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Regular.ttf",
+            "/usr/share/fonts/truetype/roboto/Roboto-Regular.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         ),
-    )
-    await state.clear()
+    ),
+    (
+        FONT_BOLD,
+        (
+            str(FONT_DIR / "TinkoffSans-Medium-full.ttf"),
+            str(FONT_DIR / "TinkoffSans-Medium.otf"),
+            str(FONT_DIR / "TinkoffSans-Medium-reportlab.ttf"),
+            str(FONT_DIR / "TinkoffSans-Medium.ttf"),
+            "~/AppData/Local/Microsoft/Windows/Fonts/Roboto-Bold.ttf",
+            "~/AppData/Local/Microsoft/Windows/Fonts/NotoSans-Bold.ttf",
+            "C:/Windows/Fonts/arialbd.ttf",
+            "C:/Windows/Fonts/segoeuib.ttf",
+            "/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Bold.ttf",
+            "/usr/share/fonts/truetype/roboto/Roboto-Bold.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ),
+    ),
+    (
+        FONT_RUBLE,
+        (
+            str(FONT_DIR / "ALSRubl-reportlab.ttf"),
+            str(FONT_DIR / "ALSRubl.ttf"),
+            str(FONT_DIR / "TinkoffSans-Regular.ttf"),
+            "C:/Windows/Fonts/arial.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ),
+    ),
+    (
+        FONT_RUBLE_BOLD,
+        (
+            str(FONT_DIR / "ALSRubl-reportlab.ttf"),
+            str(FONT_DIR / "ALSRubl.ttf"),
+            str(FONT_DIR / "TinkoffSans-Medium.ttf"),
+            "C:/Windows/Fonts/arialbd.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ),
+    ),
+    (
+        FONT_FALLBACK,
+        (
+            "C:/Windows/Fonts/segoeui.ttf",
+            "C:/Windows/Fonts/arial.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ),
+    ),
+)
+
+_fonts_registered = False
 
 
-def _resolve_template_id(raw: str | None) -> str:
-    if not raw:
-        return TEMPLATE_CLASSIC
-    return _TEMPLATE_CHOICES.get(raw.strip().lower(), TEMPLATE_CLASSIC)
+def _ensure_fonts_registered() -> None:
+    global _fonts_registered
+    if _fonts_registered:
+        return
+    for name, candidates in _FONT_CANDIDATES:
+        for path in candidates:
+            candidate = Path(path).expanduser()
+            if candidate.exists():
+                pdfmetrics.registerFont(TTFont(name, str(candidate)))
+                break
+        else:
+            raise RuntimeError(f"Font {name} not found.")
+    _fonts_registered = True
 
 
-def _render_template_pdf(values: dict[str, Any], template_id: str) -> tuple[bytes, str]:
-    if template_id == TEMPLATE_17:
-        defaults = Receipt17Data()
-        amount = values.get("amount") or defaults.amount
-        document_number = values.get("document_number") or "1-127-176-643-532"
-        auth_code = values.get("auth_code") or defaults.operation_id_line_2
-        receipt = Receipt17Data(
-            datetime_text=values.get("datetime_text") or defaults.datetime_text,
-            total=amount,
-            transfer_type=values.get("operation") or defaults.transfer_type,
-            amount=amount,
-            fee=values.get("fee") or defaults.fee,
-            sender_name=values.get("sender_name") or defaults.sender_name,
-            recipient_phone=values.get("recipient_card") or defaults.recipient_phone,
-            recipient_name=values.get("recipient_name") or defaults.recipient_name,
-            recipient_bank=values.get("recipient_bank") or defaults.recipient_bank,
-            debit_account=values.get("sender_account") or defaults.debit_account,
-            operation_id_line_1=document_number,
-            operation_id_line_2=auth_code,
-            receipt_number=f"№ {document_number.lstrip('№').strip()}",
+def _font_supports_text(font_name: str, text: str) -> bool:
+    font = pdfmetrics.getFont(font_name)
+    char_to_glyph = getattr(font.face, "charToGlyph", {})
+    return all(ord(char) in char_to_glyph for char in text)
+
+
+def _font_for_text(preferred_font: str, text: str) -> str:
+    if _font_supports_text(preferred_font, text):
+        return preferred_font
+    return FONT_FALLBACK
+
+
+def _font_for_char(preferred_font: str, char: str) -> str:
+    if _font_supports_text(preferred_font, char):
+        return preferred_font
+    return FONT_FALLBACK
+
+
+def _mixed_text_width(c: canvas.Canvas, text: str, font_name: str, size: float) -> float:
+    return sum(c.stringWidth(char, _font_for_char(font_name, char), size) for char in text)
+
+
+def _draw_text(
+    c: canvas.Canvas,
+    x: float,
+    y: float,
+    text: str,
+    font_name: str,
+    size: float,
+) -> None:
+    cursor_x = x
+    for char in text:
+        char_font = _font_for_char(font_name, char)
+        c.setFont(char_font, size)
+        c.drawString(cursor_x, y, char)
+        cursor_x += c.stringWidth(char, char_font, size)
+
+
+def _draw_right_text(
+    c: canvas.Canvas,
+    x: float,
+    y: float,
+    text: str,
+    font_name: str,
+    size: float,
+) -> None:
+    _draw_text(c, x - _mixed_text_width(c, text, font_name, size), y, text, font_name, size)
+
+
+@dataclass(slots=True)
+class Receipt17Data:
+    """Fields for the separate 17.03.2026-style demo receipt template."""
+
+    datetime_text: str = "13.02.2026  19:00:35"
+    total: str = "10 000 ₽"
+    transfer_type: str = "По номеру телефона"
+    status: str = "В обработке"
+    amount: str = "10 000 ₽"
+    fee: str = "Без комиссии"
+    sender_name: str = "Константин Иванов"
+    recipient_phone: str = "+7 (929) 539-13-33"
+    recipient_name: str = "Галина П."
+    recipient_bank: str = "Яндекс"
+    debit_account: str = "408178101000****5307"
+    operation_id_line_1: str = "A6076160011783290G100300117"
+    operation_id_line_2: str = "00117"
+    operation_type: str = "СБП"
+    receipt_number: str = "№ 1-127-176-643-532"
+    support_label: str = "Служба поддержки"
+    support_email: str = "fb@tbank.ru"
+    note_text: str = "По вопросам зачисления обращайтесь к получателю"
+
+
+PAGE_WIDTH = 270.0
+PAGE_HEIGHT = 519.0
+MARGIN_X = 20.0
+RIGHT_X = 250.0
+
+COLOR_TEXT = HexColor("#333333")
+COLOR_MUTED = HexColor("#909090")
+COLOR_ACCENT = HexColor("#ffdd2d")
+COLOR_LINK = HexColor("#1771d6")
+COLOR_STAMP = HexColor("#126cba")
+COLOR_DISCLAIMER = HexColor("#a04040")
+COLOR_WATERMARK = Color(0.85, 0.2, 0.2, alpha=0.09)
+
+DATE_Y = 432.54
+TOTAL_Y = 412.39
+FIRST_ROW_Y = 376.78
+ROW_STEP = 20.0
+OPERATION_ID_SECOND_Y = 184.70
+
+LABEL_SIZE = 9.0
+VALUE_SIZE = 9.0
+TOTAL_SIZE = 16.0
+WATERMARK_SIZE = 44.0
+WATERMARK_SPACING = 118.0
+
+
+def _draw_accent_line(c: canvas.Canvas, y: float) -> None:
+    c.setStrokeColor(COLOR_ACCENT)
+    c.setLineWidth(1.0)
+    c.line(19.0, y, 249.0, y)
+
+
+def _draw_demo_icon(c: canvas.Canvas) -> None:
+    if LOGO_PATH.exists():
+        c.drawImage(
+            ImageReader(str(LOGO_PATH)),
+            121.0,
+            463.0,
+            width=28.0,
+            height=28.0,
+            preserveAspectRatio=True,
+            mask="auto",
         )
-        return render_receipt_17_pdf(receipt), "receipt-17-demo.pdf"
-
-    receipt_values = {
-        k: v for k, v in values.items() if k in _RECEIPT_DATA_FIELDS and v is not None
-    }
-    return render_receipt_pdf(ReceiptData(**receipt_values)), "receipt-demo.pdf"
-
-
-def _parse_quick_message(text: str) -> dict[str, str]:
-    out: dict[str, str] = {}
-    for raw_line in text.splitlines():
-        if ":" not in raw_line:
-            continue
-        key, _, value = raw_line.partition(":")
-        key_norm = key.strip().lower().replace(" ", "_")
-        if key_norm not in _QUICK_KEYS:
-            continue
-        field = _QUICK_KEYS[key_norm]
-        normalized = _normalize_value(value)
-        out[field] = normalized.lower() if field == "template_id" else normalized
-    return out
-
-
-@router.message(F.text)
-async def fallback_text(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    current = await state.get_state()
-    if current == FillReceipt.template.state:
-        await _handle_template_choice(message, state)
         return
-    if data.get("quick_mode"):
-        parsed = _parse_quick_message(message.text or "")
-        await _finalize(message, state, parsed)
-        return
-    if current in _FIELD_BY_STATE:
-        await _handle_step(message, state)
-        return
-    await message.answer(
-        "Не понял. Используйте /new для пошагового заполнения "
-        "или /quick для быстрого ввода."
-    )
+
+    c.saveState()
+    c.setFillColor(COLOR_ACCENT)
+    path = c.beginPath()
+    path.moveTo(121.0, 491.0)
+    path.lineTo(149.0, 491.0)
+    path.lineTo(149.0, 471.0)
+    path.curveTo(149.0, 467.0, 143.0, 464.0, 135.0, 460.0)
+    path.curveTo(127.0, 464.0, 121.0, 467.0, 121.0, 471.0)
+    path.close()
+    c.drawPath(path, stroke=0, fill=1)
+    c.setFillColor(HexColor("#111111"))
+    c.setFont(_font_for_text(FONT_BOLD, "D"), 17.0)
+    c.drawCentredString(135.0, 470.3, "D")
+    c.restoreState()
 
 
-async def main() -> None:
-    load_dotenv()
-    token = os.getenv("BOT_TOKEN")
-    if not token:
-        raise SystemExit(
-            "BOT_TOKEN is not set. Copy .env.example to .env and fill it in."
+def _draw_demo_stamp(c: canvas.Canvas) -> None:
+    if STAMP_PATH.exists():
+        c.drawImage(
+            ImageReader(str(STAMP_PATH)),
+            66.0,
+            103.77,
+            width=175.0,
+            height=63.23,
+            preserveAspectRatio=True,
+            mask="auto",
         )
-    logging.basicConfig(level=logging.INFO)
-    proxy = os.getenv("TELEGRAM_PROXY", "").strip() or None
-    session = AiohttpSession(proxy=proxy) if proxy else None
-    if proxy:
-        logger.info("Using Telegram proxy from TELEGRAM_PROXY")
-    ca_file = os.getenv("TELEGRAM_CA_FILE", "").strip()
-    verify_ssl = os.getenv("TELEGRAM_VERIFY_SSL", "1").strip().lower()
-    if session is None and (ca_file or verify_ssl in {"0", "false", "no", "off"}):
-        session = AiohttpSession()
-    if session is not None and ca_file:
-        session._connector_init["ssl"] = ssl.create_default_context(cafile=ca_file)
-        logger.info("Using custom Telegram CA file from TELEGRAM_CA_FILE")
-    elif session is not None and verify_ssl in {"0", "false", "no", "off"}:
-        session._connector_init["ssl"] = False
-        logger.warning("Telegram SSL verification is disabled by TELEGRAM_VERIFY_SSL")
-    bot = Bot(
-        token=token,
-        session=session,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        return
+
+    c.saveState()
+    x = 66.0
+    y = 103.77
+    w = 175.0
+    h = 63.23
+    c.setStrokeColor(COLOR_STAMP)
+    c.setFillColor(COLOR_STAMP)
+    c.setLineWidth(1.0)
+    c.rect(x + 32.0, y + 10.0, w - 34.0, h - 12.0, stroke=1, fill=0)
+
+    _draw_right_text(c, x + w - 13.0, y + 47.0, "ДЕМО-БАНК", FONT_BOLD, 15.0)
+    _draw_right_text(
+        c,
+        x + w - 13.0,
+        y + 31.0,
+        "БИК 000000000 ИНН 0000000000",
+        FONT_BOLD,
+        10.5,
     )
-    dp = Dispatcher(storage=MemoryStorage())
-    dp.include_router(router)
-    logger.info("Starting bot…")
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+    _draw_right_text(c, x + w - 13.0, y + 17.0, "", FONT_BOLD, 10.5)
+
+    c.setLineWidth(1.8)
+    c.line(x - 7.0, y + 9.0, x + 72.0, y + 35.0)
+    c.line(x - 1.0, y + 17.0, x + 57.0, y + 5.0)
+    c.line(x + 14.0, y + 29.0, x + 76.0, y + 18.0)
+    c.restoreState()
+
+
+def _draw_right(c: canvas.Canvas, y: float, value: str, size: float = VALUE_SIZE) -> None:
+    if value.strip().endswith("₽"):
+        _draw_money_right(c, y, value, size, bold=False)
+        return
+    c.setFillColor(COLOR_TEXT)
+    _draw_right_text(c, RIGHT_X, y, value.strip() or "—", FONT_REGULAR, size)
+
+
+def _draw_money_right(
+    c: canvas.Canvas,
+    y: float,
+    value: str,
+    size: float,
+    *,
+    bold: bool,
+) -> None:
+    amount = value.strip().removesuffix("₽").rstrip()
+    ruble = "i"
+    amount_font = FONT_BOLD if bold else FONT_REGULAR
+    ruble_font = FONT_RUBLE_BOLD if bold else FONT_RUBLE
+    ruble_width = c.stringWidth(ruble, ruble_font, size)
+    amount_text = amount + " "
+    amount_width = _mixed_text_width(c, amount_text, amount_font, size)
+    start_x = RIGHT_X - amount_width - ruble_width
+    c.setFillColor(COLOR_TEXT)
+    _draw_text(c, start_x, y, amount_text, amount_font, size)
+    if bold:
+        _draw_bold_ruble(c, start_x + amount_width, y, ruble, ruble_font, size)
+    else:
+        c.setFont(ruble_font, size)
+        c.drawString(start_x + amount_width, y, ruble)
+
+
+def _draw_bold_ruble(
+    c: canvas.Canvas,
+    x: float,
+    y: float,
+    text: str,
+    font_name: str,
+    size: float,
+) -> None:
+    c.saveState()
+    c.setFillColor(COLOR_TEXT)
+    c.setStrokeColor(COLOR_TEXT)
+    c.setLineWidth(size / 30.0)
+    text_obj = c.beginText(x, y)
+    text_obj.setFont(font_name, size)
+    text_obj.setTextRenderMode(2)
+    text_obj.textOut(text)
+    c.drawText(text_obj)
+    c.restoreState()
+
+
+def _draw_pair(c: canvas.Canvas, y: float, label: str, value: str) -> None:
+    c.setFillColor(COLOR_TEXT)
+    _draw_text(c, MARGIN_X, y, label, FONT_REGULAR, LABEL_SIZE)
+    _draw_right(c, y, value)
+
+
+def _draw_watermark(c: canvas.Canvas) -> None:
+    c.saveState()
+    c.translate(PAGE_WIDTH / 2, PAGE_HEIGHT / 2)
+    c.rotate(35)
+    c.setFillColor(COLOR_WATERMARK)
+    text = ""
+    c.setFont(_font_for_text(FONT_BOLD, text), WATERMARK_SIZE)
+    text_width = c.stringWidth(text, FONT_BOLD, WATERMARK_SIZE)
+    half = int(PAGE_HEIGHT / WATERMARK_SPACING) + 1
+    for i in range(-half, half + 1):
+        c.drawString(-text_width / 2, i * WATERMARK_SPACING, text)
+    c.restoreState()
+
+
+def _draw_disclaimer(c: canvas.Canvas) -> None:
+    c.setFillColor(COLOR_DISCLAIMER)
+    text = ""
+    c.setFont(_font_for_text(FONT_BOLD, text), 7.0)
+    c.drawCentredString(
+        PAGE_WIDTH / 2,
+        8.0,
+        text,
+    )
+
+
+def render_receipt_17_pdf(data: Receipt17Data) -> bytes:
+    """Render the separate 17.03.2026-style demo receipt PDF."""
+    _ensure_fonts_registered()
+
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=(PAGE_WIDTH, PAGE_HEIGHT))
+    c.setTitle("Квитанция (ОБРАЗЕЦ)")
+    c.setAuthor("receipt-pdf-bot (separate demo template)")
+    c.setSubject("Демонстрационная квитанция, не имеет юридической силы")
+
+    _draw_watermark(c)
+    _draw_demo_icon(c)
+
+    c.setFillColor(COLOR_MUTED)
+    _draw_text(c, MARGIN_X, DATE_Y, data.datetime_text.strip() or "—", FONT_REGULAR, 8.0)
+
+    c.setFillColor(COLOR_TEXT)
+    _draw_text(c, 19.0, TOTAL_Y, "Итого", FONT_BOLD, TOTAL_SIZE)
+    _draw_money_right(c, TOTAL_Y, data.total.strip() or "—", TOTAL_SIZE, bold=True)
+    _draw_accent_line(c, 397.5)
+
+    rows = (
+        ("Перевод", data.transfer_type),
+        ("Статус", data.status),
+        ("Сумма", data.amount),
+        ("Комиссия", data.fee),
+        ("Отправитель", data.sender_name),
+        ("Телефон получателя", data.recipient_phone),
+        ("Получатель", data.recipient_name),
+        ("Банк получателя", data.recipient_bank),
+        ("Счет списания", data.debit_account),
+    )
+    y = FIRST_ROW_Y
+    for label, value in rows:
+        if label == "Телефон получателя":
+            c.saveState()
+            c.setFillColor(HexColor("#ffffff"))
+            c.rect(20.0, 176.0, 230.0, 108.0, stroke=0, fill=1)
+            c.restoreState()
+        _draw_pair(c, y, label, value)
+        y -= ROW_STEP
+
+    c.setFillColor(COLOR_TEXT)
+    _draw_text(c, MARGIN_X, y, "Идентификатор операции", FONT_REGULAR, LABEL_SIZE)
+    _draw_right(c, y, data.operation_id_line_1)
+    _draw_text(
+        c,
+        MARGIN_X,
+        OPERATION_ID_SECOND_Y,
+        data.operation_type,
+        FONT_REGULAR,
+        LABEL_SIZE,
+    )
+    _draw_right(c, OPERATION_ID_SECOND_Y, data.operation_id_line_2)
+
+    _draw_accent_line(c, 80.5)
+
+    c.setFillColor(COLOR_TEXT)
+    _draw_text(
+        c,
+        MARGIN_X,
+        58.82,
+        f"Квитанция  {data.receipt_number}",
+        FONT_REGULAR,
+        VALUE_SIZE,
+    )
+    c.setFillColor(COLOR_MUTED)
+    _draw_text(c, MARGIN_X, 41.82, data.note_text, FONT_REGULAR, VALUE_SIZE)
+    support_label = data.support_label + " "
+    _draw_text(c, MARGIN_X, 24.82, support_label, FONT_REGULAR, VALUE_SIZE)
+    support_width = _mixed_text_width(c, support_label, FONT_REGULAR, VALUE_SIZE)
+    c.setFillColor(COLOR_LINK)
+    _draw_text(
+        c,
+        MARGIN_X + support_width,
+        24.82,
+        data.support_email,
+        FONT_REGULAR,
+        VALUE_SIZE,
+    )
+
+    _draw_demo_stamp(c)
+
+    c.setStrokeColor(HexColor("#c2c2c2"))
+    c.setLineWidth(0.25)
+    c.line(1.0, 1.0, PAGE_WIDTH - 1.0, 1.0)
+
+    _draw_disclaimer(c)
+
+    c.showPage()
+    c.save()
+    return buf.getvalue()
 
 
 if __name__ == "__main__":
-    import asyncio
-
-    asyncio.run(main())
-
-
-__all__ = ["main", "router", "FillReceipt", "_parse_quick_message"]
+    Path("receipt-17-demo.pdf").write_bytes(render_receipt_17_pdf(Receipt17Data()))
