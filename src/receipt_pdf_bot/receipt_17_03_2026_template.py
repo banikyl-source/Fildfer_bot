@@ -32,7 +32,7 @@ _FONT_CANDIDATES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         FONT_REGULAR,
         (
-            str(FONT_DIR / "DejaVuSans.ttf"),
+            # Сначала проверяем Tinkoff Sans
             str(FONT_DIR / "TinkoffSans-Regular-full.ttf"),
             str(FONT_DIR / "TinkoffSans-Regular.otf"),
             str(FONT_DIR / "TinkoffSans-Regular-reportlab.ttf"),
@@ -45,12 +45,13 @@ _FONT_CANDIDATES: tuple[tuple[str, tuple[str, ...]], ...] = (
             "/usr/share/fonts/truetype/roboto/Roboto-Regular.ttf",
             "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            # DejaVuSans как последний резерв (можно и не добавлять сюда, если он уже есть в fallback)
         ),
     ),
     (
+    (
         FONT_BOLD,
         (
-            str(FONT_DIR / "DejaVuSans-Bold.ttf"),
             str(FONT_DIR / "TinkoffSans-Medium-full.ttf"),
             str(FONT_DIR / "TinkoffSans-Medium.otf"),
             str(FONT_DIR / "TinkoffSans-Medium-reportlab.ttf"),
@@ -65,6 +66,9 @@ _FONT_CANDIDATES: tuple[tuple[str, tuple[str, ...]], ...] = (
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         ),
     ),
+    # Блоки для рубля и жирного рубля оставляем без DejaVuSans (или можно добавить в конец)
+    ...
+    (
     (
         FONT_RUBLE,
         (
@@ -88,7 +92,7 @@ _FONT_CANDIDATES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         FONT_FALLBACK,
         (
-            str(FONT_DIR / "DejaVuSans.ttf"),
+            str(FONT_DIR / "DejaVuSans.ttf"),   # здесь DejaVuSans будет основным запасным
             "C:/Windows/Fonts/segoeui.ttf",
             "C:/Windows/Fonts/arial.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
