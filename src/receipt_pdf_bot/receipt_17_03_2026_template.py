@@ -32,6 +32,7 @@ _FONT_CANDIDATES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         FONT_REGULAR,
         (
+            str(FONT_DIR / "DejaVuSans.ttf"),
             str(FONT_DIR / "TinkoffSans-Regular-full.ttf"),
             str(FONT_DIR / "TinkoffSans-Regular.otf"),
             str(FONT_DIR / "TinkoffSans-Regular-reportlab.ttf"),
@@ -49,6 +50,7 @@ _FONT_CANDIDATES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         FONT_BOLD,
         (
+            str(FONT_DIR / "DejaVuSans-Bold.ttf"),
             str(FONT_DIR / "TinkoffSans-Medium-full.ttf"),
             str(FONT_DIR / "TinkoffSans-Medium.otf"),
             str(FONT_DIR / "TinkoffSans-Medium-reportlab.ttf"),
@@ -86,12 +88,13 @@ _FONT_CANDIDATES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         FONT_FALLBACK,
         (
-            str(FONT_DIR / "DejaVuSans.ttf"),        # добавляем ваш шрифт первым!
+            str(FONT_DIR / "DejaVuSans.ttf"),
             "C:/Windows/Fonts/segoeui.ttf",
             "C:/Windows/Fonts/arial.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         ),
     ),
+)
 
 _fonts_registered = False
 
