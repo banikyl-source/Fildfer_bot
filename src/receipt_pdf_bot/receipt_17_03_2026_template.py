@@ -86,12 +86,12 @@ _FONT_CANDIDATES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         FONT_FALLBACK,
         (
+            str(FONT_DIR / "DejaVuSans.ttf"),        # добавляем ваш шрифт первым!
             "C:/Windows/Fonts/segoeui.ttf",
             "C:/Windows/Fonts/arial.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         ),
     ),
-)
 
 _fonts_registered = False
 
