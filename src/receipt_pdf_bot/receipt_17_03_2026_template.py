@@ -124,10 +124,9 @@ def _font_for_text(preferred_font: str, text: str) -> str:
     return FONT_FALLBACK
 
 
+# ВРЕМЕННОЕ ИЗМЕНЕНИЕ ДЛЯ ТЕСТА: всегда используем предпочитаемый шрифт (Tinkoff Sans)
 def _font_for_char(preferred_font: str, char: str) -> str:
-    if _font_supports_text(preferred_font, char):
-        return preferred_font
-    return FONT_FALLBACK
+    return preferred_font
 
 
 def _mixed_text_width(c: canvas.Canvas, text: str, font_name: str, size: float) -> float:
