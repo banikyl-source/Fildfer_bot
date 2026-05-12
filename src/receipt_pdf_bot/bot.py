@@ -50,84 +50,87 @@ class FillReceipt(StatesGroup):
     fee = State()
     document_number = State()
     auth_code = State()
+    receipt_number = State()  # НОВОЕ: отдельный номер квитанции
 
 
-_FIELD_ORDER: tuple[tuple[State, str, str], ...] = (
-    (
-        FillReceipt.datetime_text,
-        "datetime_text",
-        "<b>Шаг 1/10.</b> Введите дату и время операции.\n"
-        "Например: <code>5 апреля 2026 20:29:42 (МСК)</code>\n"
-        "(или отправьте «-», чтобы оставить прочерк)",
-    ),
-    (
-        FillReceipt.operation,
-        "operation",
-        "<b>Шаг 2/10.</b> Название операции.\n"
-        "Например: <code>Перевод клиенту</code>, <code>Оплата услуг</code>",
-    ),
-    (
-        FillReceipt.recipient_name,
-        "recipient_name",
-        "<b>Шаг 3/10.</b> ФИО получателя.\n"
-        "Например: <code>Даниил Андреевич З.</code>",
-    ),
-    (
-        FillReceipt.recipient_card,
-        "recipient_card",
-        "<b>Шаг 4/10.</b> Карта или телефон получателя.\n"
-        "Например: <code>**** 0264</code> или <code>+7 999 000-00-00</code>",
-    ),
-    (
-        FillReceipt.recipient_bank,
-        "recipient_bank",
-        "<b>Шаг 5/11.</b> Банк получателя.\n"
-        "Например: <code>Яндекс</code>",
-    ),
-    (
-        FillReceipt.sender_name,
-        "sender_name",
-        "<b>Шаг 5/10.</b> ФИО отправителя.\n"
-        "Например: <code>Артём Анатольевич М.</code>",
-    ),
-    (
-        FillReceipt.sender_account,
-        "sender_account",
-        "<b>Шаг 6/10.</b> Счёт отправителя.\n"
-        "Например: <code>**** 0220</code>",
-    ),
-    (
-        FillReceipt.amount,
-        "amount",
-        "<b>Шаг 7/10.</b> Сумма перевода.\n"
-        "Например: <code>259,00 ₽</code>",
-    ),
-    (
-        FillReceipt.fee,
-        "fee",
-        "<b>Шаг 8/10.</b> Комиссия.\n"
-        "Например: <code>0,00 ₽</code>",
-    ),
-    (
-        FillReceipt.document_number,
-        "document_number",
-        "<b>Шаг 9/10.</b> Номер документа.\n"
-        "Например: <code>1000000004428252091</code>",
-    ),
-    (
-        FillReceipt.auth_code,
-        "auth_code",
-        "<b>Шаг 10/10.</b> Код авторизации.\n"
-        "Например: <code>760646</code>",
-    ),
+# Порядок шагов для классического шаблона (без recipient_bank)
+_FIELD_ORDER_CLASSIC = (
+    FillReceipt.datetime_text,
+    FillReceipt.operation,
+    FillReceipt.recipient_name,
+    FillReceipt.recipient_card,
+    FillReceipt.sender_name,
+    FillReceipt.sender_account,
+    FillReceipt.amount,
+    FillReceipt.fee,
+    FillReceipt.document_number,
+    FillReceipt.auth_code,
+    FillReceipt.receipt_number,   # добавлен
 )
-_NEXT_PROMPT: dict[str, str] = {state.state: prompt for state, _, prompt in _FIELD_ORDER}
-_FIELD_BY_STATE: dict[str, str] = {
-    state.state: field_name for state, field_name, _ in _FIELD_ORDER
+
+# Полный порядок для шаблона 17 (включая recipient_bank)
+_FIELD_ORDER_FULL = (
+    FillReceipt.datetime_text,
+    FillReceipt.operation,
+    FillReceipt.recipient_name,
+    FillReceipt.recipient_card,
+    FillReceipt.recipient_bank,
+    FillReceipt.sender_name,
+    FillReceipt.sender_account,
+    FillReceipt.amount,
+    FillReceipt.fee,
+    FillReceipt.document_number,
+    FillReceipt.auth_code,
+    FillReceipt.receipt_number,   # добавлен
+)
+
+# Маппинг состояний в имена полей (для всех шаблонов)
+_FIELD_BY_STATE = {
+    FillReceipt.datetime_text.state: "datetime_text",
+    FillReceipt.operation.state: "operation",
+    FillReceipt.recipient_name.state: "recipient_name",
+    FillReceipt.recipient_card.state: "recipient_card",
+    FillReceipt.recipient_bank.state: "recipient_bank",
+    FillReceipt.sender_name.state: "sender_name",
+    FillReceipt.sender_account.state: "sender_account",
+    FillReceipt.amount.state: "amount",
+    FillReceipt.fee.state: "fee",
+    FillReceipt.document_number.state: "document_number",
+    FillReceipt.auth_code.state: "auth_code",
+    FillReceipt.receipt_number.state: "receipt_number",
 }
-_NEXT_STATE: dict[str, State | None] = {
-    state.state: _FIELD_ORDER[i + 1][0] if i + 1 < len(_FIELD_ORDER) else None
-    for i, (state, _, _) in enumerate(_FIELD_ORDER)
+
+# Тексты подсказок для каждого шага (для классического шаблона, для 17-го переопределяются)
+_NEXT_PROMPT = {
+    FillReceipt.datetime_text.state: "<b>Шаг 1/11.</b> Введите дату и время операции.\nНапример: <code>5 апреля 2026 20:29:42 (МСК)</code>",
+    FillReceipt.operation.state: "<b>Шаг 2/11.</b> Название операции.\nНапример: <code>Перевод клиенту</code>",
+    FillReceipt.recipient_name.state: "<b>Шаг 3/11.</b> ФИО получателя.\nНапример: <code>Даниил Андреевич З.</code>",
+    FillReceipt.recipient_card.state: "<b>Шаг 4/11.</b> Карта или телефон получателя.\nНапример: <code>**** 0264</code>",
+    FillReceipt.recipient_bank.state: "<b>Шаг 5/11.</b> Банк получателя (только для шаблона 2).\nНапример: <code>Яндекс</code>",
+    FillReceipt.sender_name.state: "<b>Шаг 5/11.</b> ФИО отправителя.\nНапример: <code>Артём Анатольевич М.</code>",
+    FillReceipt.sender_account.state: "<b>Шаг 6/11.</b> Счёт отправителя.\nНапример: <code>**** 0220</code>",
+    FillReceipt.amount.state: "<b>Шаг 7/11.</b> Сумма перевода.\nНапример: <code>259,00 ₽</code>",
+    FillReceipt.fee.state: "<b>Шаг 8/11.</b> Комиссия.\nНапример: <code>0,00 ₽</code>",
+    FillReceipt.document_number.state: "<b>Шаг 9/11.</b> Номер документа (идентификатор операции, первая строка).\nНапример: <code>A6076160011783290G100300117</code>",
+    FillReceipt.auth_code.state: "<b>Шаг 10/11.</b> Код авторизации (вторая строка).\nНапример: <code>00117</code>",
+    FillReceipt.receipt_number.state: "<b>Шаг 11/11.</b> Номер квитанции (отдельно от идентификатора).\nНапример: <code>№ 1-127-176-643-532</code> (или просто <code>1-127-176-643-532</code>)",
+}
+
+# Для шаблона 17 используем те же подсказки, но с поправкой на количество шагов и значения по умолчанию
+_TEMPLATE_17_DEFAULTS = Receipt17Data()
+_TEMPLATE_17_FIELD_HINTS: dict[str, tuple[str, str]] = {
+    "datetime_text": ("Дата и время", _TEMPLATE_17_DEFAULTS.datetime_text),
+    "operation": ("Тип перевода", _TEMPLATE_17_DEFAULTS.transfer_type),
+    "recipient_name": ("Получатель", _TEMPLATE_17_DEFAULTS.recipient_name),
+    "recipient_card": ("Телефон получателя", _TEMPLATE_17_DEFAULTS.recipient_phone),
+    "recipient_bank": ("Банк получателя", _TEMPLATE_17_DEFAULTS.recipient_bank),
+    "sender_name": ("Отправитель", _TEMPLATE_17_DEFAULTS.sender_name),
+    "sender_account": ("Счёт списания", _TEMPLATE_17_DEFAULTS.debit_account),
+    "amount": ("Сумма", _TEMPLATE_17_DEFAULTS.amount),
+    "fee": ("Комиссия", _TEMPLATE_17_DEFAULTS.fee),
+    "document_number": ("Идентификатор операции (первая строка)", _TEMPLATE_17_DEFAULTS.operation_id_line_1),
+    "auth_code": ("Код авторизации (вторая строка)", _TEMPLATE_17_DEFAULTS.operation_id_line_2),
+    "receipt_number": ("Номер квитанции", _TEMPLATE_17_DEFAULTS.receipt_number),
 }
 
 TEMPLATE_CLASSIC = "classic"
@@ -151,27 +154,7 @@ _TEMPLATE_NAMES: dict[str, str] = {
 
 _RECEIPT_DATA_FIELDS = set(ReceiptData.__dataclass_fields__)
 
-_TEMPLATE_17_DEFAULTS = Receipt17Data()
-_TEMPLATE_17_FIELD_HINTS: dict[str, tuple[str, str]] = {
-    "datetime_text": ("Дата и время", _TEMPLATE_17_DEFAULTS.datetime_text),
-    "operation": ("Тип перевода", _TEMPLATE_17_DEFAULTS.transfer_type),
-    "recipient_name": ("Получатель", _TEMPLATE_17_DEFAULTS.recipient_name),
-    "recipient_card": ("Телефон получателя", _TEMPLATE_17_DEFAULTS.recipient_phone),
-    "recipient_bank": ("Банк получателя", _TEMPLATE_17_DEFAULTS.recipient_bank),
-    "sender_name": ("Отправитель", _TEMPLATE_17_DEFAULTS.sender_name),
-    "sender_account": ("Счёт списания", _TEMPLATE_17_DEFAULTS.debit_account),
-    "amount": ("Сумма", _TEMPLATE_17_DEFAULTS.amount),
-    "fee": ("Комиссия", _TEMPLATE_17_DEFAULTS.fee),
-    "document_number": (
-        "Идентификатор операции",
-        _TEMPLATE_17_DEFAULTS.operation_id_line_1,
-    ),
-    "auth_code": ("Код/окончание идентификатора", _TEMPLATE_17_DEFAULTS.operation_id_line_2),
-}
-
-
 _QUICK_KEYS: dict[str, str] = {
-    # field name -> set of accepted keys (lowercased)
     "datetime_text": "datetime_text",
     "дата": "datetime_text",
     "datetime": "datetime_text",
@@ -204,10 +187,12 @@ _QUICK_KEYS: dict[str, str] = {
     "auth_code": "auth_code",
     "код": "auth_code",
     "код_авторизации": "auth_code",
+    "receipt_number": "receipt_number",
+    "квитанция": "receipt_number",
+    "номер_квитанции": "receipt_number",
     "template": "template_id",
     "шаблон": "template_id",
 }
-
 
 _DEMO_BANNER = (
     "Бот выдаёт <b>демонстрационный PDF с водяным знаком ОБРАЗЕЦ</b>. "
@@ -254,7 +239,7 @@ async def cmd_help(message: Message) -> None:
         "<b>Пошаговый режим:</b> /new — бот по очереди спросит каждое поле.\n\n"
         "<b>Быстрый режим:</b> /quick, потом одно сообщение в формате\n"
         "<code>дата: 5 апреля 2026 20:29:42 (МСК)\n"
-        "шаблон: 1\n"
+        "шаблон: 2\n"
         "операция: Перевод клиенту\n"
         "получатель: Иван И.\n"
         "карта: **** 1234\n"
@@ -263,8 +248,9 @@ async def cmd_help(message: Message) -> None:
         "счёт: **** 5678\n"
         "сумма: 259,00 ₽\n"
         "комиссия: 0,00 ₽\n"
-        "номер: 1000000004428252091\n"
-        "код: 760646</code>\n\n"
+        "номер: A6076160011783290G100300117\n"
+        "код: 00117\n"
+        "квитанция: № 1-127-176-643-532</code>\n\n"
         "Любое поле можно пропустить (просто не указывайте ключ или "
         "напишите «-»).\n\n"
         "<b>Шаблоны:</b> <code>1</code> — чек по операции, "
@@ -292,29 +278,10 @@ async def cmd_templates(message: Message) -> None:
     await message.answer(_template_prompt())
 
 
-def _prompt_for_state(state: State, template_id: str) -> str:
-    visible_steps = _field_order_for_template(template_id)
-    if template_id != TEMPLATE_17:
-        return _NEXT_PROMPT[state.state]
-
-    field_name = _FIELD_BY_STATE[state.state]
-    label, default = _TEMPLATE_17_FIELD_HINTS[field_name]
-    step_number = next(
-        i for i, field_state in enumerate(visible_steps, start=1)
-        if field_state.state == state.state
-    )
-    return (
-        f"<b>Шаг {step_number}/{len(visible_steps)}.</b> {label}.\n"
-        f"По умолчанию: <code>{default}</code>\n"
-        "Отправьте новое значение или <code>-</code>, чтобы оставить как в образце."
-    )
-
-
 def _field_order_for_template(template_id: str) -> tuple[State, ...]:
-    states = tuple(state for state, _, _ in _FIELD_ORDER)
     if template_id == TEMPLATE_17:
-        return states
-    return tuple(state for state in states if state != FillReceipt.recipient_bank)
+        return _FIELD_ORDER_FULL
+    return _FIELD_ORDER_CLASSIC
 
 
 def _next_state_for_template(current_state: str, template_id: str) -> State | None:
@@ -323,6 +290,20 @@ def _next_state_for_template(current_state: str, template_id: str) -> State | No
         if state.state == current_state:
             return states[i + 1] if i + 1 < len(states) else None
     return None
+
+
+def _prompt_for_state(state: State, template_id: str) -> str:
+    if template_id != TEMPLATE_17:
+        return _NEXT_PROMPT[state.state]
+    field_name = _FIELD_BY_STATE[state.state]
+    label, default = _TEMPLATE_17_FIELD_HINTS[field_name]
+    states = _field_order_for_template(template_id)
+    step_number = next(i for i, s in enumerate(states, start=1) if s.state == state.state)
+    return (
+        f"<b>Шаг {step_number}/{len(states)}.</b> {label}.\n"
+        f"По умолчанию: <code>{default}</code>\n"
+        "Отправьте новое значение или <code>-</code>, чтобы оставить как в образце."
+    )
 
 
 @router.message(Command("new"))
@@ -340,7 +321,7 @@ async def _start_field_flow(
     state: FSMContext,
     template_id: str,
 ) -> None:
-    first_state, _, _ = _FIELD_ORDER[0]
+    first_state = _field_order_for_template(template_id)[0]
     await state.update_data(template_id=template_id, values={})
     await state.set_state(first_state)
     await message.answer(
@@ -356,11 +337,10 @@ async def _handle_template_choice(message: Message, state: FSMContext) -> None:
         await _start_field_flow(message, state, template_id)
         return
 
-    # Compatibility: if user starts entering fields immediately after /new,
-    # treat that message as the first field for the classic template.
-    first_state, field_name, _ = _FIELD_ORDER[0]
+    # Compatibility: если после /new сразу отправили поле, считаем шаблоном классический
+    first_state = _FIELD_ORDER_CLASSIC[0]
     next_state = _next_state_for_template(first_state.state, TEMPLATE_CLASSIC)
-    values = {field_name: _normalize_value(message.text or "")}
+    values = {_FIELD_BY_STATE[first_state.state]: _normalize_value(message.text or "")}
     await state.update_data(template_id=TEMPLATE_CLASSIC, values=values)
     if next_state is None:
         await _finalize(message, state, values)
@@ -375,11 +355,8 @@ async def _handle_step(message: Message, state: FSMContext) -> None:
         return
     field_name = _FIELD_BY_STATE[current]
     data = await state.get_data()
-
-    # /quick mode is handled in fallback_text below; here we are in step mode.
     if data.get("quick_mode"):
         return
-
     values: dict[str, Any] = data.get("values", {})
     values[field_name] = _normalize_value(message.text or "")
     await state.update_data(values=values)
@@ -402,7 +379,8 @@ async def cmd_quick(message: Message, state: FSMContext) -> None:
         "Отправьте одним сообщением поля в формате <code>ключ: значение</code> "
         "(каждое с новой строки). См. /help для примера. "
         "Любое поле можно пропустить. Шаблон можно указать так: "
-        "<code>шаблон: 2</code>."
+        "<code>шаблон: 2</code>.\n\n"
+        "Для номера квитанции используйте ключ <code>квитанция</code> или <code>номер_квитанции</code>."
     )
     await state.update_data(quick_mode=True)
 
@@ -435,8 +413,13 @@ def _render_template_pdf(values: dict[str, Any], template_id: str) -> tuple[byte
     if template_id == TEMPLATE_17:
         defaults = Receipt17Data()
         amount = values.get("amount") or defaults.amount
-        document_number = values.get("document_number") or "1-127-176-643-532"
+        document_number = values.get("document_number") or defaults.operation_id_line_1
         auth_code = values.get("auth_code") or defaults.operation_id_line_2
+        # НОВОЕ: номер квитанции берётся из отдельного поля
+        receipt_number = values.get("receipt_number")
+        if not receipt_number:
+            # Если не задан, используем значение по умолчанию из шаблона
+            receipt_number = defaults.receipt_number
         receipt = Receipt17Data(
             datetime_text=values.get("datetime_text") or defaults.datetime_text,
             total=amount,
@@ -450,7 +433,7 @@ def _render_template_pdf(values: dict[str, Any], template_id: str) -> tuple[byte
             debit_account=values.get("sender_account") or defaults.debit_account,
             operation_id_line_1=document_number,
             operation_id_line_2=auth_code,
-            receipt_number=f"№ {document_number.lstrip('№').strip()}",
+            receipt_number=receipt_number,
         )
         return render_receipt_17_pdf(receipt), "receipt-17-demo.pdf"
 
@@ -531,7 +514,6 @@ async def main() -> None:
 
 if __name__ == "__main__":
     import asyncio
-
     asyncio.run(main())
 
 
