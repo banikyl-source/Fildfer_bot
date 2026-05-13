@@ -187,7 +187,7 @@ class Receipt17Data:
 PAGE_WIDTH = 270.0
 PAGE_HEIGHT = 519.0
 MARGIN_X = 20.0
-RIGHT_X = 249.0
+RIGHT_X = 250.0
 
 COLOR_TEXT = HexColor("#333333")
 COLOR_MUTED = HexColor("#909090")
@@ -199,7 +199,7 @@ COLOR_WATERMARK = Color(0.85, 0.2, 0.2, alpha=0.09)
 
 DATE_Y = 432.54
 TOTAL_Y = 412.39
-FIRST_ROW_Y = 375.78
+FIRST_ROW_Y = 382.5
 ROW_STEP = 20.1
 OPERATION_ID_SECOND_Y = 184.70
 
@@ -342,9 +342,7 @@ def _draw_bold_ruble(
 def _draw_pair(c: canvas.Canvas, y: float, label: str, value: str) -> None:
     c.setFillColor(COLOR_TEXT)
     _draw_text(c, MARGIN_X, y, label, FONT_REGULAR, LABEL_SIZE)
-    RIGHT_Y_OFFSET = -0.8   # отрицательное значение = выше, положительное = ниже
-    _draw_right(c, y + RIGHT_Y_OFFSET, value)
-
+    _draw_right(c, y, value)
 
 def _draw_watermark(c: canvas.Canvas) -> None:
     c.saveState()
