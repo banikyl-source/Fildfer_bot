@@ -342,7 +342,8 @@ def _draw_bold_ruble(
 def _draw_pair(c: canvas.Canvas, y: float, label: str, value: str) -> None:
     c.setFillColor(COLOR_TEXT)
     _draw_text(c, MARGIN_X, y, label, FONT_REGULAR, LABEL_SIZE)
-    _draw_right(c, y, value)
+    RIGHT_Y_OFFSET = -0.8   # отрицательное значение = выше, положительное = ниже
+    _draw_right(c, y + RIGHT_Y_OFFSET, value)
 
 
 def _draw_watermark(c: canvas.Canvas) -> None:
