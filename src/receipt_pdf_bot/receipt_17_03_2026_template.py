@@ -188,7 +188,7 @@ class Receipt17Data:
 PAGE_WIDTH = 270.0
 PAGE_HEIGHT = 519.0
 MARGIN_X = 20.0
-RIGHT_X = 250.0
+RIGHT_X = 249.0   # чуть уменьшили для лучшего выравнивания
 
 COLOR_TEXT = HexColor("#333333")
 COLOR_MUTED = HexColor("#909090")
@@ -198,30 +198,30 @@ COLOR_STAMP = HexColor("#126cba")
 COLOR_DISCLAIMER = HexColor("#a04040")
 COLOR_WATERMARK = Color(0.85, 0.2, 0.2, alpha=0.09)
 
-# ========== ТОЧНЫЕ КООРДИНАТЫ ИЗ ОРИГИНАЛЬНОГО PDF ==========
-DATE_Y = 439.84
-TOTAL_Y = 427.00
+# ========== КООРДИНАТЫ, АДАПТИРОВАННЫЕ ПОД ШРИФТ TINKOFF SANS ==========
+DATE_Y = 431.62
+TOTAL_Y = 418.78
 
 # Вертикальные позиции для каждой строки основного блока
 ROW_Y_VALUES = [
-    385.00,  # Перевод / По номеру телефона
-    365.00,  # Статус / В обработке
-    345.00,  # Сумма / 10 000 ₽
-    324.00,  # Комиссия / Без комиссии
-    304.00,  # Отправитель / Константин Иванов
-    284.00,  # Телефон получателя / +7 (929) 539-13-33
-    264.00,  # Получатель / Галина П.
-    244.00,  # Банк получателя / Яндекс
-    224.00,  # Счет списания / 408178101000****5307
-    204.00,  # Идентификатор операции / длинный номер
+    376.78,  # Перевод
+    356.78,  # Статус
+    336.78,  # Сумма
+    315.78,  # Комиссия
+    295.78,  # Отправитель
+    275.78,  # Телефон получателя
+    255.78,  # Получатель
+    235.78,  # Банк получателя
+    215.78,  # Счет списания
+    195.78,  # Идентификатор операции
 ]
 
-OPERATION_ID_SECOND_Y = 192.92   # для строки "СБП 00117"
-ACCENT_LINE_Y = 397.5            # жёлтая линия под "Итого"
+OPERATION_ID_SECOND_Y = 184.70
+ACCENT_LINE_Y = 389.28
 
-RECEIPT_NUMBER_Y = 67.04
-NOTE_TEXT_Y = 50.04
-SUPPORT_Y = 33.04
+RECEIPT_NUMBER_Y = 58.82
+NOTE_TEXT_Y = 41.82
+SUPPORT_Y = 24.82
 
 LABEL_SIZE = 9.0
 VALUE_SIZE = 9.0
@@ -436,7 +436,7 @@ def render_receipt_17_pdf(data: Receipt17Data) -> bytes:
         _draw_right(c, y, value)
 
     # Идентификатор операции (первая строка)
-    ident_y = ROW_Y_VALUES[-1]  # = 204.00
+    ident_y = ROW_Y_VALUES[-1]  # = 195.78
     c.setFillColor(COLOR_TEXT)
     _draw_text(c, MARGIN_X, ident_y, "Идентификатор операции", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, ident_y, data.operation_id_line_1)
