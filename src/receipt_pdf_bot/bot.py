@@ -1,10 +1,8 @@
 import logging
 import os
 import json
-import ssl
 from datetime import datetime
 from typing import Any, Dict, List, Set, Optional
-from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
@@ -32,7 +30,7 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 # ---------- НАСТРОЙКИ ----------
-ADMIN_ID = 7531804130  # замените на ваш ID
+ADMIN_ID = 7531804130  # замените на свой ID
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     raise SystemExit("BOT_TOKEN is not set.")
@@ -41,7 +39,7 @@ KEYS_FILE = "keys.txt"
 ALLOWED_USERS_FILE = "allowed_users.json"
 USED_KEYS_FILE = "used_keys.json"
 
-# ---------- FSM (полностью как у вас) ----------
+# ---------- FSM для шагов чека ----------
 class FillReceipt(StatesGroup):
     template = State()
     datetime_text = State()
@@ -57,10 +55,15 @@ class FillReceipt(StatesGroup):
     auth_code = State()
     receipt_number = State()
 
+# Простые состояния для админ-действий (чтобы не конфликтовать с основным FSM)
+class AdminActions(StatesGroup):
+    waiting_for_new_key = State()
+    waiting_for_delete_key = State()
+
 TEMPLATE_CLASSIC = "classic"
 TEMPLATE_17 = "receipt_17"
 
-# ---------- ПОЛЯ И ПОРЯДОК ШАГОВ ----------
+# ---------- ПОЛЯ И ПОРЯДОК ШАГОВ (копия из вашего проекта) ----------
 _FIELD_BY_STATE = {
     FillReceipt.template.state: "template_id",
     FillReceipt.datetime_text.state: "datetime_text",
@@ -144,7 +147,7 @@ _TEMPLATE_NAMES = {
 
 _RECEIPT_DATA_FIELDS = set(ReceiptData.__dataclass_fields__)
 
-# ---------- СИСТЕМА КЛЮЧЕЙ И ПОЛЬЗОВАТЕЛЕЙ ----------
+# ---------- СИСТЕМА КЛЮЧЕЙ ----------
 def load_keys() -> Set[str]:
     if not os.path.exists(KEYS_FILE):
         with open(KEYS_FILE, "w") as f:
@@ -218,16 +221,14 @@ def reset_all_users() -> None:
 VALID_KEYS = load_keys()
 allowed_users = load_allowed_users()
 
-# ---------- КЛАВИАТУРЫ (НОВЫЕ) ----------
+# ---------- КЛАВИАТУРЫ ----------
 def get_main_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
-    # Чеки и Админ панель в одной строке
     row = [KeyboardButton(text="💰 Чеки")]
     if is_admin:
         row.append(KeyboardButton(text="⚙️ Админ панель"))
     return ReplyKeyboardMarkup(keyboard=[row], resize_keyboard=True)
 
 def get_banks_keyboard() -> ReplyKeyboardMarkup:
-    # Т-банк и СберБанк в одной строке, кнопка "Назад" отдельно
     buttons = [
         [KeyboardButton(text="Т-банк 🏦"), KeyboardButton(text="СберБанк 🏦")],
         [KeyboardButton(text="◀️ Назад в меню")]
@@ -280,7 +281,6 @@ def _prompt_for_state(state: State, template_id: str) -> str:
 def _resolve_template_id(raw: Optional[str]) -> str:
     if not raw:
         return TEMPLATE_CLASSIC
-    # сопоставляем названия кнопок
     if "Т-банк" in raw:
         return TEMPLATE_17
     if "СберБанк" in raw:
@@ -330,7 +330,7 @@ async def cmd_start(message: Message, state: FSMContext):
             "🔐 Доступ ограничен. Введите лицензионный ключ.\nЕсли у вас нет ключа, обратитесь к администратору."
         )
 
-# Обработка текста для авторизации по ключу
+# Обработка всех текстовых сообщений
 @router.message(F.text)
 async def handle_text(message: Message, state: FSMContext):
     user_id = message.from_user.id
@@ -351,7 +351,32 @@ async def handle_text(message: Message, state: FSMContext):
             await message.answer("❌ Неверный или уже использованный ключ.")
         return
 
-    # Авторизован – обрабатываем кнопки
+    # Проверяем, находимся ли в режиме ожидания добавления ключа
+    current_admin_state = await state.get_state()
+    if current_admin_state == AdminActions.waiting_for_new_key.state:
+        # Добавляем любое слово как новый ключ
+        new_key = text
+        if new_key in VALID_KEYS:
+            await message.answer("❌ Такой ключ уже существует.")
+        else:
+            VALID_KEYS.add(new_key)
+            save_keys(VALID_KEYS)
+            await message.answer(f"✅ Ключ `{new_key}` добавлен.", parse_mode="Markdown")
+        await state.clear()
+        await message.answer("Админ-панель:", reply_markup=get_admin_keyboard())
+        return
+
+    if current_admin_state == AdminActions.waiting_for_delete_key.state:
+        key_to_del = text
+        if delete_key_by_admin(key_to_del):
+            await message.answer(f"✅ Ключ `{key_to_del}` удалён из активных.", parse_mode="Markdown")
+        else:
+            await message.answer(f"❌ Ключ `{key_to_del}` не найден.", parse_mode="Markdown")
+        await state.clear()
+        await message.answer("Админ-панель:", reply_markup=get_admin_keyboard())
+        return
+
+    # Обработка кнопок меню
     if text == "💰 Чеки":
         await state.clear()
         await message.answer("Выберите банк:", reply_markup=get_banks_keyboard())
@@ -369,7 +394,6 @@ async def handle_text(message: Message, state: FSMContext):
         return
 
     if text in ("Т-банк 🏦", "СберБанк 🏦"):
-        # Определяем шаблон
         if "Т-банк" in text:
             template_id = TEMPLATE_17
         else:
@@ -391,7 +415,41 @@ async def handle_text(message: Message, state: FSMContext):
         await message.answer("Заполнение отменено.", reply_markup=get_main_keyboard(is_admin))
         return
 
-    # Обработка шагов FSM (если есть активное состояние)
+    # Админские кнопки (без перехода в состояние ожидания – просто вызываем действия)
+    if text == "➕ Добавить ключ" and user_id == ADMIN_ID:
+        await state.set_state(AdminActions.waiting_for_new_key)
+        await message.answer("Введите новый ключ (любое слово).\nОтправьте текст, и он станет ключом:")
+        return
+
+    if text == "🗑 Удалить ключ" and user_id == ADMIN_ID:
+        await state.set_state(AdminActions.waiting_for_delete_key)
+        await message.answer("Введите ключ, который хотите удалить из активных:")
+        return
+
+    if text == "📋 Список активных ключей" and user_id == ADMIN_ID:
+        if not VALID_KEYS:
+            await message.answer("📭 Активных ключей нет.")
+        else:
+            await message.answer("📋 Активные ключи:\n" + "\n".join(VALID_KEYS))
+        return
+
+    if text == "📜 История использованных" and user_id == ADMIN_ID:
+        used = load_used_keys()
+        if not used:
+            await message.answer("📭 История пуста.")
+            return
+        text_hist = "📜 Последние 20 использованных ключей:\n"
+        for item in used[-20:]:
+            text_hist += f"🔑 {item['key']} — @{item['username']} ({item['user_id']}) — {item['timestamp']}\n"
+        await message.answer(text_hist[:4000])
+        return
+
+    if text == "🔄 Сбросить всех пользователей" and user_id == ADMIN_ID:
+        reset_all_users()
+        await message.answer("✅ Список пользователей сброшен.")
+        return
+
+    # Обработка шагов FSM для чека (если есть активное состояние чека)
     current_state = await state.get_state()
     if current_state and current_state in _FIELD_BY_STATE:
         data = await state.get_data()
@@ -422,72 +480,6 @@ async def handle_text(message: Message, state: FSMContext):
 
     # Если ничего не подошло
     await message.answer("Используйте кнопки меню.")
-
-# ---------- АДМИНСКИЕ ФУНКЦИИ ----------
-@router.message(F.text == "🔄 Сбросить всех пользователей")
-async def reset_all_users_button(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    reset_all_users()
-    await message.answer("✅ Список пользователей сброшен.", reply_markup=get_admin_keyboard())
-
-@router.message(F.text == "➕ Добавить ключ")
-async def add_key_prompt(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    await message.answer("Введите новый ключ (одной строкой):")
-    # Тут нужно дождаться ответа (используем простой подход с состоянием)
-    # Для простоты используем следующий шаг, сохраняя состояние
-    await router.wait_for("message", check=lambda m: m.chat.id == message.chat.id, on_received=add_new_key)
-
-async def add_new_key(message: Message):
-    key = message.text.strip()
-    if not key:
-        await message.answer("❌ Пустой ключ.")
-    elif key in VALID_KEYS:
-        await message.answer("❌ Такой ключ уже существует.")
-    else:
-        VALID_KEYS.add(key)
-        save_keys(VALID_KEYS)
-        await message.answer(f"✅ Ключ `{key}` добавлен.", parse_mode="Markdown")
-    await message.answer("Админ-панель:", reply_markup=get_admin_keyboard())
-
-@router.message(F.text == "🗑 Удалить ключ")
-async def delete_key_prompt(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    await message.answer("Введите ключ, который хотите удалить:")
-    await router.wait_for("message", check=lambda m: m.chat.id == message.chat.id, on_received=delete_key_step)
-
-async def delete_key_step(message: Message):
-    key = message.text.strip()
-    if delete_key_by_admin(key):
-        await message.answer(f"✅ Ключ `{key}` удалён из активных.", parse_mode="Markdown")
-    else:
-        await message.answer(f"❌ Ключ `{key}` не найден.", parse_mode="Markdown")
-    await message.answer("Админ-панель:", reply_markup=get_admin_keyboard())
-
-@router.message(F.text == "📋 Список активных ключей")
-async def active_keys_list(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    if not VALID_KEYS:
-        await message.answer("📭 Активных ключей нет.")
-    else:
-        await message.answer("📋 Активные ключи:\n" + "\n".join(VALID_KEYS))
-
-@router.message(F.text == "📜 История использованных")
-async def used_keys_history(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    used = load_used_keys()
-    if not used:
-        await message.answer("📭 История пуста.")
-        return
-    text = "📜 Последние 20 использованных ключей:\n"
-    for item in used[-20:]:
-        text += f"🔑 {item['key']} — @{item['username']} ({item['user_id']}) — {item['timestamp']}\n"
-    await message.answer(text[:4000])
 
 # ---------- ЗАПУСК ----------
 async def main() -> None:
