@@ -403,7 +403,7 @@ def render_receipt_17_pdf(data: Receipt17Data) -> bytes:
     _draw_bold_ruble(c, start_x + amount_width, TOTAL_Y, ruble, FONT_RUBLE_BOLD, TOTAL_SIZE)
 
     # Жёлтая линия под итогом (привязана к TOTAL_Y)
-    _draw_accent_line(c, TOTAL_Y - 20.0)   # линия примерно через 20 пунктов ниже текста, подберите при необходимости
+    _draw_accent_line(c, TOTAL_Y - 29.5)   # линия примерно через 20 пунктов ниже текста, подберите при необходимости
 
     # Ручная отрисовка остальных строк
     c.setFillColor(COLOR_TEXT)
