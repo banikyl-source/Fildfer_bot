@@ -1,4 +1,6 @@
-"""Separate demo template based on receipt_17.03.2026.pdf."""
+"""Separate demo template based on receipt_17.03.2026.pdf.
+Adjusted for TinkoffSans font metrics.
+"""
 
 from __future__ import annotations
 
@@ -191,26 +193,25 @@ COLOR_STAMP = HexColor("#126cba")
 COLOR_DISCLAIMER = HexColor("#a04040")
 COLOR_WATERMARK = Color(0.85, 0.2, 0.2, alpha=0.09)
 
-# ========== АБСОЛЮТНЫЕ КООРДИНАТЫ (ВЗЯТЫ ИЗ ОРИГИНАЛА) ==========
-DATE_Y = 439.84
-TOTAL_Y = 427.00
+# ========== КООРДИНАТЫ, СКОРРЕКТИРОВАННЫЕ ПОД ШРИФТ TINKOFF SANS (ОРИГИНАЛ - 8.22) ==========
+DATE_Y = 431.62          # 439.84 - 8.22
+TOTAL_Y = 418.78         # 427.00 - 8.22
 
-# Координаты для левых названий и правых значений (одинаковые Y)
-Y_TRANSFER = 385.00
-Y_STATUS = 365.00
-Y_AMOUNT = 345.00
-Y_FEE = 324.00
-Y_SENDER = 304.00
-Y_RECIPIENT_PHONE = 284.00
-Y_RECIPIENT_NAME = 264.00
-Y_RECIPIENT_BANK = 244.00
-Y_DEBIT_ACCOUNT = 224.00
-Y_IDENT_FIRST = 204.00
-Y_IDENT_SECOND = 192.92
+Y_TRANSFER = 376.78      # 385.00 - 8.22
+Y_STATUS = 356.78        # 365.00 - 8.22
+Y_AMOUNT = 336.78        # 345.00 - 8.22
+Y_FEE = 315.78           # 324.00 - 8.22
+Y_SENDER = 295.78        # 304.00 - 8.22
+Y_RECIPIENT_PHONE = 275.78   # 284.00 - 8.22
+Y_RECIPIENT_NAME = 255.78    # 264.00 - 8.22
+Y_RECIPIENT_BANK = 235.78    # 244.00 - 8.22
+Y_DEBIT_ACCOUNT = 215.78     # 224.00 - 8.22
+Y_IDENT_FIRST = 195.78       # 204.00 - 8.22
+Y_IDENT_SECOND = 184.70      # 192.92 - 8.22
 
-Y_RECEIPT_NUMBER = 67.04
-Y_NOTE = 50.04
-Y_SUPPORT = 33.04
+Y_RECEIPT_NUMBER = 58.82     # 67.04 - 8.22
+Y_NOTE = 41.82               # 50.04 - 8.22
+Y_SUPPORT = 24.82            # 33.04 - 8.22
 
 LABEL_SIZE = 9.0
 VALUE_SIZE = 9.0
@@ -383,51 +384,50 @@ def render_receipt_17_pdf(data: Receipt17Data) -> bytes:
     c.setFillColor(COLOR_TEXT)
     _draw_text(c, 19.0, TOTAL_Y, "Итого", FONT_BOLD, TOTAL_SIZE)
     _draw_money_right(c, TOTAL_Y, data.total.strip() or "—", TOTAL_SIZE, bold=True)
-    _draw_accent_line(c, 397.5)
+    _draw_accent_line(c, 397.5 - 8.22)  # 389.28
 
-    # ----- Отрисовка каждой строки вручную -----
+    # Ручная отрисовка строк
     c.setFillColor(COLOR_TEXT)
-    # 1. Перевод
     _draw_text(c, MARGIN_X, Y_TRANSFER, "Перевод", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_TRANSFER, data.transfer_type)
-    # 2. Статус
+
     _draw_text(c, MARGIN_X, Y_STATUS, "Статус", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_STATUS, data.status)
-    # 3. Сумма
+
     _draw_text(c, MARGIN_X, Y_AMOUNT, "Сумма", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_AMOUNT, data.amount)
-    # 4. Комиссия
+
     _draw_text(c, MARGIN_X, Y_FEE, "Комиссия", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_FEE, data.fee)
-    # 5. Отправитель
+
     _draw_text(c, MARGIN_X, Y_SENDER, "Отправитель", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_SENDER, data.sender_name)
-    # 6. Телефон получателя (с белым фоном)
+
+    # Белый фон для телефона
     c.saveState()
     c.setFillColor(HexColor("#ffffff"))
     c.rect(20.0, 176.0, 230.0, 108.0, stroke=0, fill=1)
     c.restoreState()
     _draw_text(c, MARGIN_X, Y_RECIPIENT_PHONE, "Телефон получателя", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_RECIPIENT_PHONE, data.recipient_phone)
-    # 7. Получатель
+
     _draw_text(c, MARGIN_X, Y_RECIPIENT_NAME, "Получатель", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_RECIPIENT_NAME, data.recipient_name)
-    # 8. Банк получателя
+
     _draw_text(c, MARGIN_X, Y_RECIPIENT_BANK, "Банк получателя", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_RECIPIENT_BANK, data.recipient_bank)
-    # 9. Счет списания
+
     _draw_text(c, MARGIN_X, Y_DEBIT_ACCOUNT, "Счет списания", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_DEBIT_ACCOUNT, data.debit_account)
 
-    # Идентификатор операции (первая строка)
+    # Идентификатор операции
     _draw_text(c, MARGIN_X, Y_IDENT_FIRST, "Идентификатор операции", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_IDENT_FIRST, data.operation_id_line_1)
 
-    # Вторая строка: СБП и код
     _draw_text(c, MARGIN_X, Y_IDENT_SECOND, data.operation_type, FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_IDENT_SECOND, data.operation_id_line_2)
 
-    _draw_accent_line(c, 80.5)
+    _draw_accent_line(c, 80.5 - 8.22)  # 72.28
 
     # Нижняя часть
     c.setFillColor(COLOR_TEXT)
@@ -441,7 +441,6 @@ def render_receipt_17_pdf(data: Receipt17Data) -> bytes:
     _draw_text(c, MARGIN_X + support_width, Y_SUPPORT, data.support_email, FONT_REGULAR, VALUE_SIZE)
 
     _draw_demo_stamp(c)
-
     c.setStrokeColor(HexColor("#c2c2c2"))
     c.setLineWidth(0.25)
     c.line(1.0, 1.0, PAGE_WIDTH - 1.0, 1.0)
