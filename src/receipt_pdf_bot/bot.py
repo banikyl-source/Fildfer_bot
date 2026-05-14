@@ -1,19 +1,11 @@
-"""Telegram bot front-end for the demo receipt generator.
-
-The bot guides the user through a step-by-step FSM dialog, collects every
-field, and replies with a watermarked demo PDF. Two input modes are
-supported:
-
-  * `/new` — step-by-step questions (default, easiest)
-  * `/quick` — paste all fields in one message in `key: value` format
-"""
-
-from __future__ import annotations
-
+# src/receipt_pdf_bot/bot.py
 import logging
 import os
+import json
 import ssl
-from typing import Any
+from datetime import datetime
+from typing import Any, Dict, List, Set, Optional
+from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
@@ -23,7 +15,13 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BufferedInputFile, Message
+from aiogram.types import (
+    BufferedInputFile,
+    Message,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardRemove,
+)
 from dotenv import load_dotenv
 
 from receipt_pdf_bot.receipt import ReceiptData, render_receipt_pdf
@@ -33,10 +31,20 @@ from receipt_pdf_bot.receipt_17_03_2026_template import (
 )
 
 logger = logging.getLogger(__name__)
-
 router = Router()
 
+# ---------- НАСТРОЙКИ (ЗАМЕНИТЕ НА СВОИ) ----------
+ADMIN_ID = 7531804130  # Ваш Telegram ID (число)
+TOKEN = os.getenv("BOT_TOKEN")
+if not TOKEN:
+    raise SystemExit("BOT_TOKEN is not set. Set it in .env or environment variable.")
 
+# Файлы для хранения ключей и пользователей
+KEYS_FILE = "keys.txt"
+ALLOWED_USERS_FILE = "allowed_users.json"
+USED_KEYS_FILE = "used_keys.json"
+
+# ---------- FSM СОСТОЯНИЯ (как в вашем проекте) ----------
 class FillReceipt(StatesGroup):
     template = State()
     datetime_text = State()
@@ -50,42 +58,14 @@ class FillReceipt(StatesGroup):
     fee = State()
     document_number = State()
     auth_code = State()
-    receipt_number = State()  # НОВОЕ: отдельный номер квитанции
+    receipt_number = State()  # добавлен для независимой квитанции
 
+TEMPLATE_CLASSIC = "classic"
+TEMPLATE_17 = "receipt_17"
 
-# Порядок шагов для классического шаблона (без recipient_bank)
-_FIELD_ORDER_CLASSIC = (
-    FillReceipt.datetime_text,
-    FillReceipt.operation,
-    FillReceipt.recipient_name,
-    FillReceipt.recipient_card,
-    FillReceipt.sender_name,
-    FillReceipt.sender_account,
-    FillReceipt.amount,
-    FillReceipt.fee,
-    FillReceipt.document_number,
-    FillReceipt.auth_code,
-    FillReceipt.receipt_number,   # добавлен
-)
-
-# Полный порядок для шаблона 17 (включая recipient_bank)
-_FIELD_ORDER_FULL = (
-    FillReceipt.datetime_text,
-    FillReceipt.operation,
-    FillReceipt.recipient_name,
-    FillReceipt.recipient_card,
-    FillReceipt.recipient_bank,
-    FillReceipt.sender_name,
-    FillReceipt.sender_account,
-    FillReceipt.amount,
-    FillReceipt.fee,
-    FillReceipt.document_number,
-    FillReceipt.auth_code,
-    FillReceipt.receipt_number,   # добавлен
-)
-
-# Маппинг состояний в имена полей (для всех шаблонов)
+# ---------- ПОЛЯ И ПОРЯДОК ШАГОВ (оригинал из вашего бота) ----------
 _FIELD_BY_STATE = {
+    FillReceipt.template.state: "template_id",
     FillReceipt.datetime_text.state: "datetime_text",
     FillReceipt.operation.state: "operation",
     FillReceipt.recipient_name.state: "recipient_name",
@@ -100,25 +80,52 @@ _FIELD_BY_STATE = {
     FillReceipt.receipt_number.state: "receipt_number",
 }
 
-# Тексты подсказок для каждого шага (для классического шаблона, для 17-го переопределяются)
+_FIELD_ORDER_CLASSIC = (
+    FillReceipt.datetime_text,
+    FillReceipt.operation,
+    FillReceipt.recipient_name,
+    FillReceipt.recipient_card,
+    FillReceipt.sender_name,
+    FillReceipt.sender_account,
+    FillReceipt.amount,
+    FillReceipt.fee,
+    FillReceipt.document_number,
+    FillReceipt.auth_code,
+    FillReceipt.receipt_number,
+)
+
+_FIELD_ORDER_FULL = (
+    FillReceipt.datetime_text,
+    FillReceipt.operation,
+    FillReceipt.recipient_name,
+    FillReceipt.recipient_card,
+    FillReceipt.recipient_bank,
+    FillReceipt.sender_name,
+    FillReceipt.sender_account,
+    FillReceipt.amount,
+    FillReceipt.fee,
+    FillReceipt.document_number,
+    FillReceipt.auth_code,
+    FillReceipt.receipt_number,
+)
+
 _NEXT_PROMPT = {
-    FillReceipt.datetime_text.state: "<b>Шаг 1/11.</b> Введите дату и время операции.\nНапример: <code>5 апреля 2026 20:29:42 (МСК)</code>",
-    FillReceipt.operation.state: "<b>Шаг 2/11.</b> Название операции.\nНапример: <code>Перевод клиенту</code>",
-    FillReceipt.recipient_name.state: "<b>Шаг 3/11.</b> ФИО получателя.\nНапример: <code>Даниил Андреевич З.</code>",
-    FillReceipt.recipient_card.state: "<b>Шаг 4/11.</b> Карта или телефон получателя.\nНапример: <code>**** 0264</code>",
-    FillReceipt.recipient_bank.state: "<b>Шаг 5/11.</b> Банк получателя (только для шаблона 2).\nНапример: <code>Яндекс</code>",
-    FillReceipt.sender_name.state: "<b>Шаг 5/11.</b> ФИО отправителя.\nНапример: <code>Артём Анатольевич М.</code>",
-    FillReceipt.sender_account.state: "<b>Шаг 6/11.</b> Счёт отправителя.\nНапример: <code>**** 0220</code>",
-    FillReceipt.amount.state: "<b>Шаг 7/11.</b> Сумма перевода.\nНапример: <code>259,00 ₽</code>",
-    FillReceipt.fee.state: "<b>Шаг 8/11.</b> Комиссия.\nНапример: <code>0,00 ₽</code>",
-    FillReceipt.document_number.state: "<b>Шаг 9/11.</b> Номер документа (идентификатор операции, первая строка).\nНапример: <code>A6076160011783290G100300117</code>",
-    FillReceipt.auth_code.state: "<b>Шаг 10/11.</b> Код авторизации (вторая строка).\nНапример: <code>00117</code>",
-    FillReceipt.receipt_number.state: "<b>Шаг 11/11.</b> Номер квитанции (отдельно от идентификатора).\nНапример: <code>№ 1-127-176-643-532</code> (или просто <code>1-127-176-643-532</code>)",
+    FillReceipt.datetime_text.state: "<b>Шаг 1/11.</b> Введите дату и время операции.\nПример: <code>5 апреля 2026 20:29:42 (МСК)</code>",
+    FillReceipt.operation.state: "<b>Шаг 2/11.</b> Название операции.\nПример: <code>Перевод клиенту</code>",
+    FillReceipt.recipient_name.state: "<b>Шаг 3/11.</b> ФИО получателя.\nПример: <code>Даниил Андреевич З.</code>",
+    FillReceipt.recipient_card.state: "<b>Шаг 4/11.</b> Карта или телефон получателя.\nПример: <code>**** 0264</code>",
+    FillReceipt.recipient_bank.state: "<b>Шаг 5/11.</b> Банк получателя (только для шаблона 2).\nПример: <code>Яндекс</code>",
+    FillReceipt.sender_name.state: "<b>Шаг 5/11.</b> ФИО отправителя.\nПример: <code>Артём Анатольевич М.</code>",
+    FillReceipt.sender_account.state: "<b>Шаг 6/11.</b> Счёт отправителя.\nПример: <code>**** 0220</code>",
+    FillReceipt.amount.state: "<b>Шаг 7/11.</b> Сумма перевода.\nПример: <code>259,00 ₽</code>",
+    FillReceipt.fee.state: "<b>Шаг 8/11.</b> Комиссия.\nПример: <code>0,00 ₽</code>",
+    FillReceipt.document_number.state: "<b>Шаг 9/11.</b> Номер документа (идентификатор, первая строка).\nПример: <code>A6076160011783290G100300117</code>",
+    FillReceipt.auth_code.state: "<b>Шаг 10/11.</b> Код авторизации (вторая строка).\nПример: <code>00117</code>",
+    FillReceipt.receipt_number.state: "<b>Шаг 11/11.</b> Номер квитанции (отдельно от идентификатора).\nПример: <code>№ 1-127-176-643-532</code>",
 }
 
-# Для шаблона 17 используем те же подсказки, но с поправкой на количество шагов и значения по умолчанию
 _TEMPLATE_17_DEFAULTS = Receipt17Data()
-_TEMPLATE_17_FIELD_HINTS: dict[str, tuple[str, str]] = {
+_TEMPLATE_17_FIELD_HINTS = {
     "datetime_text": ("Дата и время", _TEMPLATE_17_DEFAULTS.datetime_text),
     "operation": ("Тип перевода", _TEMPLATE_17_DEFAULTS.transfer_type),
     "recipient_name": ("Получатель", _TEMPLATE_17_DEFAULTS.recipient_name),
@@ -133,164 +140,156 @@ _TEMPLATE_17_FIELD_HINTS: dict[str, tuple[str, str]] = {
     "receipt_number": ("Номер квитанции", _TEMPLATE_17_DEFAULTS.receipt_number),
 }
 
-TEMPLATE_CLASSIC = "classic"
-TEMPLATE_17 = "receipt_17"
-
-_TEMPLATE_CHOICES: dict[str, str] = {
-    "1": TEMPLATE_CLASSIC,
-    "classic": TEMPLATE_CLASSIC,
-    "старый": TEMPLATE_CLASSIC,
-    "обычный": TEMPLATE_CLASSIC,
-    "2": TEMPLATE_17,
-    "17": TEMPLATE_17,
-    "receipt_17": TEMPLATE_17,
-    "новый": TEMPLATE_17,
-}
-
-_TEMPLATE_NAMES: dict[str, str] = {
-    TEMPLATE_CLASSIC: "Шаблон 1: чек по операции",
-    TEMPLATE_17: "Шаблон 2: квитанция 17.03",
+_TEMPLATE_NAMES = {
+    TEMPLATE_CLASSIC: "Чек по операции (классический)",
+    TEMPLATE_17: "Квитанция 17.03 (новый шаблон)",
 }
 
 _RECEIPT_DATA_FIELDS = set(ReceiptData.__dataclass_fields__)
 
-_QUICK_KEYS: dict[str, str] = {
-    "datetime_text": "datetime_text",
-    "дата": "datetime_text",
-    "datetime": "datetime_text",
-    "operation": "operation",
-    "операция": "operation",
-    "recipient_name": "recipient_name",
-    "получатель": "recipient_name",
-    "фио_получателя": "recipient_name",
-    "recipient_card": "recipient_card",
-    "карта": "recipient_card",
-    "карта_получателя": "recipient_card",
-    "телефон": "recipient_card",
-    "телефон_получателя": "recipient_card",
-    "recipient_bank": "recipient_bank",
-    "банк": "recipient_bank",
-    "банк_получателя": "recipient_bank",
-    "sender_name": "sender_name",
-    "отправитель": "sender_name",
-    "фио_отправителя": "sender_name",
-    "sender_account": "sender_account",
-    "счёт": "sender_account",
-    "счет": "sender_account",
-    "amount": "amount",
-    "сумма": "amount",
-    "fee": "fee",
-    "комиссия": "fee",
-    "document_number": "document_number",
-    "номер_документа": "document_number",
-    "номер": "document_number",
-    "auth_code": "auth_code",
-    "код": "auth_code",
-    "код_авторизации": "auth_code",
-    "receipt_number": "receipt_number",
-    "квитанция": "receipt_number",
-    "номер_квитанции": "receipt_number",
-    "template": "template_id",
-    "шаблон": "template_id",
+_QUICK_KEYS = {
+    "datetime_text": "datetime_text", "дата": "datetime_text",
+    "operation": "operation", "операция": "operation",
+    "recipient_name": "recipient_name", "получатель": "recipient_name",
+    "recipient_card": "recipient_card", "карта": "recipient_card", "телефон": "recipient_card",
+    "recipient_bank": "recipient_bank", "банк": "recipient_bank",
+    "sender_name": "sender_name", "отправитель": "sender_name",
+    "sender_account": "sender_account", "счёт": "sender_account",
+    "amount": "amount", "сумма": "amount",
+    "fee": "fee", "комиссия": "fee",
+    "document_number": "document_number", "номер_документа": "document_number", "номер": "document_number",
+    "auth_code": "auth_code", "код": "auth_code", "код_авторизации": "auth_code",
+    "receipt_number": "receipt_number", "квитанция": "receipt_number", "номер_квитанции": "receipt_number",
+    "template": "template_id", "шаблон": "template_id",
 }
 
-_DEMO_BANNER = (
-    "Бот выдаёт <b>демонстрационный PDF с водяным знаком ОБРАЗЕЦ</b>. "
-    "Документ не является платёжным и не имеет юридической силы. "
-    "Использование сгенерированных файлов для введения третьих лиц "
-    "в заблуждение запрещено."
-)
+_TEMPLATE_CHOICES = {
+    "1": TEMPLATE_CLASSIC, "classic": TEMPLATE_CLASSIC, "старый": TEMPLATE_CLASSIC,
+    "2": TEMPLATE_17, "17": TEMPLATE_17, "receipt_17": TEMPLATE_17, "новый": TEMPLATE_17,
+}
 
+# ---------- СИСТЕМА КЛЮЧЕЙ И ПОЛЬЗОВАТЕЛЕЙ ----------
+def load_keys() -> Set[str]:
+    if not os.path.exists(KEYS_FILE):
+        with open(KEYS_FILE, "w") as f:
+            f.write("DEMO123\n")
+        print(f"⚠️ Создан {KEYS_FILE}, добавьте ключи.")
+    with open(KEYS_FILE, "r") as f:
+        return set(line.strip() for line in f if line.strip())
 
+def save_keys(keys_set: Set[str]) -> None:
+    with open(KEYS_FILE, "w") as f:
+        for key in keys_set:
+            f.write(key + "\n")
+
+def load_used_keys() -> List[Dict]:
+    if os.path.exists(USED_KEYS_FILE):
+        with open(USED_KEYS_FILE, "r") as f:
+            return json.load(f)
+    return []
+
+def save_used_keys(used_list: List[Dict]) -> None:
+    with open(USED_KEYS_FILE, "w") as f:
+        json.dump(used_list, f, indent=2, ensure_ascii=False)
+
+def add_used_key(key: str, user_id: int, username: str) -> None:
+    used = load_used_keys()
+    used.append({
+        "key": key,
+        "user_id": user_id,
+        "username": username,
+        "timestamp": datetime.now().isoformat()
+    })
+    save_used_keys(used)
+
+def consume_key(key: str, user_id: int, username: str) -> bool:
+    global VALID_KEYS
+    if key in VALID_KEYS:
+        VALID_KEYS.remove(key)
+        save_keys(VALID_KEYS)
+        add_used_key(key, user_id, username)
+        return True
+    return False
+
+def delete_key_by_admin(key: str) -> bool:
+    global VALID_KEYS
+    if key in VALID_KEYS:
+        VALID_KEYS.remove(key)
+        save_keys(VALID_KEYS)
+        return True
+    return False
+
+def load_allowed_users() -> Set[str]:
+    if os.path.exists(ALLOWED_USERS_FILE):
+        with open(ALLOWED_USERS_FILE, "r") as f:
+            return set(json.load(f))
+    return set()
+
+def save_allowed_users(users: Set[str]) -> None:
+    with open(ALLOWED_USERS_FILE, "w") as f:
+        json.dump(list(users), f)
+
+def is_allowed(user_id: int) -> bool:
+    return str(user_id) in allowed_users
+
+def allow_user(user_id: int) -> None:
+    allowed_users.add(str(user_id))
+    save_allowed_users(allowed_users)
+
+def reset_all_users() -> None:
+    allowed_users.clear()
+    save_allowed_users(allowed_users)
+
+VALID_KEYS = load_keys()
+allowed_users = load_allowed_users()
+
+# ---------- КЛАВИАТУРЫ (красивый интерфейс) ----------
+def get_main_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
+    buttons = [
+        [KeyboardButton(text="💰 Создать чек")],
+        [KeyboardButton(text="ℹ️ Помощь")]
+    ]
+    if is_admin:
+        buttons.append([KeyboardButton(text="🛠 Админ панель")])
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+def get_templates_keyboard() -> ReplyKeyboardMarkup:
+    buttons = [
+        [KeyboardButton(text="📄 Чек по операции (старый)")],
+        [KeyboardButton(text="📄 Квитанция 17.03 (новый)")],
+        [KeyboardButton(text="◀️ Назад в меню")]
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+def get_admin_keyboard() -> ReplyKeyboardMarkup:
+    buttons = [
+        [KeyboardButton(text="🔄 Сбросить всех пользователей")],
+        [KeyboardButton(text="➕ Добавить ключ"), KeyboardButton(text="🗑 Удалить ключ")],
+        [KeyboardButton(text="📋 Список активных ключей"), KeyboardButton(text="📜 История использованных")],
+        [KeyboardButton(text="◀️ Назад в меню")]
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+def get_cancel_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="❌ Отменить заполнение")]],
+        resize_keyboard=True
+    )
+
+# ---------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ----------
 def _normalize_value(text: str) -> str:
     text = text.strip()
     return "" if text in {"-", "—", "_"} else text
 
+def _field_order_for_template(template_id: str):
+    return _FIELD_ORDER_FULL if template_id == TEMPLATE_17 else _FIELD_ORDER_CLASSIC
 
-def _allowed_user(user_id: int) -> bool:
-    raw = os.getenv("ALLOWED_USER_IDS", "").strip()
-    if not raw:
-        return True
-    allow = {int(x) for x in raw.replace(",", " ").split() if x.strip().isdigit()}
-    return user_id in allow
-
-
-@router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    if not _allowed_user(message.from_user.id):
-        await message.answer("Бот ограничен списком пользователей.")
-        return
-    await message.answer(
-        f"Привет! {_DEMO_BANNER}\n\n"
-        "Команды:\n"
-        "/new — заполнить чек по шагам\n"
-        "/quick — отправить все поля одним сообщением\n"
-        "/templates — список шаблонов\n"
-        "/cancel — отменить текущее заполнение\n"
-        "/help — справка"
-    )
-
-
-@router.message(Command("help"))
-async def cmd_help(message: Message) -> None:
-    await message.answer(
-        f"{_DEMO_BANNER}\n\n"
-        "<b>Пошаговый режим:</b> /new — бот по очереди спросит каждое поле.\n\n"
-        "<b>Быстрый режим:</b> /quick, потом одно сообщение в формате\n"
-        "<code>дата: 5 апреля 2026 20:29:42 (МСК)\n"
-        "шаблон: 2\n"
-        "операция: Перевод клиенту\n"
-        "получатель: Иван И.\n"
-        "карта: **** 1234\n"
-        "банк: Яндекс\n"
-        "отправитель: Пётр П.\n"
-        "счёт: **** 5678\n"
-        "сумма: 259,00 ₽\n"
-        "комиссия: 0,00 ₽\n"
-        "номер: A6076160011783290G100300117\n"
-        "код: 00117\n"
-        "квитанция: № 1-127-176-643-532</code>\n\n"
-        "Любое поле можно пропустить (просто не указывайте ключ или "
-        "напишите «-»).\n\n"
-        "<b>Шаблоны:</b> <code>1</code> — чек по операции, "
-        "<code>2</code> — квитанция 17.03."
-    )
-
-
-@router.message(Command("cancel"))
-async def cmd_cancel(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    await message.answer("Отменено. /new — начать заново.")
-
-
-def _template_prompt() -> str:
-    return (
-        "<b>Выберите шаблон:</b>\n"
-        "<code>1</code> — чек по операции\n"
-        "<code>2</code> — квитанция 17.03\n\n"
-        "Отправьте цифру шаблона."
-    )
-
-
-@router.message(Command("templates"))
-async def cmd_templates(message: Message) -> None:
-    await message.answer(_template_prompt())
-
-
-def _field_order_for_template(template_id: str) -> tuple[State, ...]:
-    if template_id == TEMPLATE_17:
-        return _FIELD_ORDER_FULL
-    return _FIELD_ORDER_CLASSIC
-
-
-def _next_state_for_template(current_state: str, template_id: str) -> State | None:
+def _next_state_for_template(current_state: str, template_id: str) -> Optional[State]:
     states = _field_order_for_template(template_id)
-    for i, state in enumerate(states):
-        if state.state == current_state:
+    for i, s in enumerate(states):
+        if s.state == current_state:
             return states[i + 1] if i + 1 < len(states) else None
     return None
-
 
 def _prompt_for_state(state: State, template_id: str) -> str:
     if template_id != TEMPLATE_17:
@@ -298,128 +297,25 @@ def _prompt_for_state(state: State, template_id: str) -> str:
     field_name = _FIELD_BY_STATE[state.state]
     label, default = _TEMPLATE_17_FIELD_HINTS[field_name]
     states = _field_order_for_template(template_id)
-    step_number = next(i for i, s in enumerate(states, start=1) if s.state == state.state)
+    step = next(i for i, s in enumerate(states, 1) if s.state == state.state)
     return (
-        f"<b>Шаг {step_number}/{len(states)}.</b> {label}.\n"
+        f"<b>Шаг {step}/{len(states)}.</b> {label}.\n"
         f"По умолчанию: <code>{default}</code>\n"
         "Отправьте новое значение или <code>-</code>, чтобы оставить как в образце."
     )
 
-
-@router.message(Command("new"))
-async def cmd_new(message: Message, state: FSMContext) -> None:
-    if not _allowed_user(message.from_user.id):
-        return
-    await state.clear()
-    await state.update_data(values={})
-    await state.set_state(FillReceipt.template)
-    await message.answer(_template_prompt())
-
-
-async def _start_field_flow(
-    message: Message,
-    state: FSMContext,
-    template_id: str,
-) -> None:
-    first_state = _field_order_for_template(template_id)[0]
-    await state.update_data(template_id=template_id, values={})
-    await state.set_state(first_state)
-    await message.answer(
-        f"Выбран: <b>{_TEMPLATE_NAMES[template_id]}</b>.\n\n"
-        f"{_prompt_for_state(first_state, template_id)}"
-    )
-
-
-async def _handle_template_choice(message: Message, state: FSMContext) -> None:
-    text = (message.text or "").strip().lower()
-    template_id = _TEMPLATE_CHOICES.get(text)
-    if template_id is not None:
-        await _start_field_flow(message, state, template_id)
-        return
-
-    # Compatibility: если после /new сразу отправили поле, считаем шаблоном классический
-    first_state = _FIELD_ORDER_CLASSIC[0]
-    next_state = _next_state_for_template(first_state.state, TEMPLATE_CLASSIC)
-    values = {_FIELD_BY_STATE[first_state.state]: _normalize_value(message.text or "")}
-    await state.update_data(template_id=TEMPLATE_CLASSIC, values=values)
-    if next_state is None:
-        await _finalize(message, state, values)
-        return
-    await state.set_state(next_state)
-    await message.answer(_prompt_for_state(next_state, TEMPLATE_CLASSIC))
-
-
-async def _handle_step(message: Message, state: FSMContext) -> None:
-    current = await state.get_state()
-    if current is None or current not in _FIELD_BY_STATE:
-        return
-    field_name = _FIELD_BY_STATE[current]
-    data = await state.get_data()
-    if data.get("quick_mode"):
-        return
-    values: dict[str, Any] = data.get("values", {})
-    values[field_name] = _normalize_value(message.text or "")
-    await state.update_data(values=values)
-
-    template_id = data.get("template_id", TEMPLATE_CLASSIC)
-    next_state = _next_state_for_template(current, template_id)
-    if next_state is None:
-        await _finalize(message, state, values)
-        return
-    await state.set_state(next_state)
-    await message.answer(_prompt_for_state(next_state, template_id))
-
-
-@router.message(Command("quick"))
-async def cmd_quick(message: Message, state: FSMContext) -> None:
-    if not _allowed_user(message.from_user.id):
-        return
-    await state.clear()
-    await message.answer(
-        "Отправьте одним сообщением поля в формате <code>ключ: значение</code> "
-        "(каждое с новой строки). См. /help для примера. "
-        "Любое поле можно пропустить. Шаблон можно указать так: "
-        "<code>шаблон: 2</code>.\n\n"
-        "Для номера квитанции используйте ключ <code>квитанция</code> или <code>номер_квитанции</code>."
-    )
-    await state.update_data(quick_mode=True)
-
-
-async def _finalize(
-    message: Message, state: FSMContext, values: dict[str, Any]
-) -> None:
-    state_data = await state.get_data()
-    raw_template = values.pop("template_id", None) or state_data.get("template_id")
-    template_id = _resolve_template_id(raw_template)
-    pdf_bytes, filename = _render_template_pdf(values, template_id)
-    await message.answer_document(
-        BufferedInputFile(pdf_bytes, filename=filename),
-        caption=(
-            f"Готово: <b>{_TEMPLATE_NAMES[template_id]}</b>. "
-            "Это <b>ОБРАЗЕЦ</b> — демонстрационный документ "
-            "с водяным знаком. Не является платёжным документом."
-        ),
-    )
-    await state.clear()
-
-
-def _resolve_template_id(raw: str | None) -> str:
+def _resolve_template_id(raw: Optional[str]) -> str:
     if not raw:
         return TEMPLATE_CLASSIC
     return _TEMPLATE_CHOICES.get(raw.strip().lower(), TEMPLATE_CLASSIC)
 
-
-def _render_template_pdf(values: dict[str, Any], template_id: str) -> tuple[bytes, str]:
+def _render_template_pdf(values: Dict[str, Any], template_id: str) -> tuple[bytes, str]:
     if template_id == TEMPLATE_17:
         defaults = Receipt17Data()
         amount = values.get("amount") or defaults.amount
-        document_number = values.get("document_number") or defaults.operation_id_line_1
-        auth_code = values.get("auth_code") or defaults.operation_id_line_2
-        # НОВОЕ: номер квитанции берётся из отдельного поля
-        receipt_number = values.get("receipt_number")
-        if not receipt_number:
-            # Если не задан, используем значение по умолчанию из шаблона
-            receipt_number = defaults.receipt_number
+        doc_num = values.get("document_number") or defaults.operation_id_line_1
+        auth = values.get("auth_code") or defaults.operation_id_line_2
+        receipt_num = values.get("receipt_number") or defaults.receipt_number
         receipt = Receipt17Data(
             datetime_text=values.get("datetime_text") or defaults.datetime_text,
             total=amount,
@@ -431,75 +327,310 @@ def _render_template_pdf(values: dict[str, Any], template_id: str) -> tuple[byte
             recipient_name=values.get("recipient_name") or defaults.recipient_name,
             recipient_bank=values.get("recipient_bank") or defaults.recipient_bank,
             debit_account=values.get("sender_account") or defaults.debit_account,
-            operation_id_line_1=document_number,
-            operation_id_line_2=auth_code,
-            receipt_number=receipt_number,
+            operation_id_line_1=doc_num,
+            operation_id_line_2=auth,
+            receipt_number=receipt_num,
         )
         return render_receipt_17_pdf(receipt), "receipt-17-demo.pdf"
-
-    receipt_values = {
-        k: v for k, v in values.items() if k in _RECEIPT_DATA_FIELDS and v is not None
-    }
+    # classic template
+    receipt_values = {k: v for k, v in values.items() if k in _RECEIPT_DATA_FIELDS and v}
     return render_receipt_pdf(ReceiptData(**receipt_values)), "receipt-demo.pdf"
 
-
-def _parse_quick_message(text: str) -> dict[str, str]:
-    out: dict[str, str] = {}
-    for raw_line in text.splitlines():
-        if ":" not in raw_line:
+def _parse_quick_message(text: str) -> Dict[str, str]:
+    out = {}
+    for line in text.splitlines():
+        if ":" not in line:
             continue
-        key, _, value = raw_line.partition(":")
+        key, _, val = line.partition(":")
         key_norm = key.strip().lower().replace(" ", "_")
-        if key_norm not in _QUICK_KEYS:
-            continue
-        field = _QUICK_KEYS[key_norm]
-        normalized = _normalize_value(value)
-        out[field] = normalized.lower() if field == "template_id" else normalized
+        if key_norm in _QUICK_KEYS:
+            field = _QUICK_KEYS[key_norm]
+            out[field] = _normalize_value(val)
     return out
 
+# ---------- ОСНОВНЫЕ ХЕНДЛЕРЫ ----------
+@router.message(CommandStart())
+async def cmd_start(message: Message, state: FSMContext):
+    await state.clear()
+    user_id = message.from_user.id
+    if is_allowed(user_id):
+        is_admin = (user_id == ADMIN_ID)
+        await message.answer(
+            "👋 Добро пожаловать!\nЯ помогу сгенерировать демонстрационный чек.\n\nИспользуйте кнопки ниже.",
+            reply_markup=get_main_keyboard(is_admin)
+        )
+    else:
+        await message.answer(
+            "🔐 Доступ ограничен. Введите лицензионный ключ.\nЕсли у вас нет ключа, обратитесь к администратору."
+        )
 
-@router.message(F.text)
-async def fallback_text(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    current = await state.get_state()
-    if current == FillReceipt.template.state:
-        await _handle_template_choice(message, state)
+@router.message(Command("menu"))
+async def cmd_menu(message: Message, state: FSMContext):
+    await state.clear()
+    user_id = message.from_user.id
+    if not is_allowed(user_id):
+        await message.answer("❌ Вы не авторизованы. Введите ключ.")
         return
-    if data.get("quick_mode"):
-        parsed = _parse_quick_message(message.text or "")
-        await _finalize(message, state, parsed)
+    is_admin = (user_id == ADMIN_ID)
+    await message.answer("📋 Главное меню", reply_markup=get_main_keyboard(is_admin))
+
+@router.message(Command("new"))
+async def cmd_new(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    if not is_allowed(user_id):
+        await message.answer("❌ Не авторизованы.")
         return
-    if current in _FIELD_BY_STATE:
-        await _handle_step(message, state)
-        return
+    await state.clear()
+    await state.update_data(values={})
+    await state.set_state(FillReceipt.template)
     await message.answer(
-        "Не понял. Используйте /new для пошагового заполнения "
-        "или /quick для быстрого ввода."
+        "Выберите тип чека (нажмите кнопку):",
+        reply_markup=get_templates_keyboard()
     )
 
+@router.message(Command("quick"))
+async def cmd_quick(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    if not is_allowed(user_id):
+        await message.answer("❌ Не авторизованы.")
+        return
+    await state.clear()
+    await message.answer(
+        "🚀 Быстрый режим.\nОтправьте поля в формате <code>ключ: значение</code> (каждое с новой строки).\n"
+        "Пример:\n"
+        "<code>шаблон: 2\n"
+        "сумма: 10000 ₽\n"
+        "отправитель: Константин Иванов\n"
+        "получатель: Галина П.\n"
+        "номер: A6076160011783290G100300117\n"
+        "код: 00117\n"
+        "квитанция: № 1-127-176-643-532</code>",
+        parse_mode="HTML"
+    )
+    await state.update_data(quick_mode=True)
 
+@router.message(Command("cancel"))
+async def cmd_cancel(message: Message, state: FSMContext):
+    await state.clear()
+    user_id = message.from_user.id
+    if not is_allowed(user_id):
+        await message.answer("❌ Не авторизованы.")
+        return
+    await message.answer("❌ Заполнение отменено.", reply_markup=get_main_keyboard(user_id == ADMIN_ID))
+
+# ---------- ОБРАБОТЧИКИ КНОПОК ----------
+@router.message(F.text == "💰 Создать чек")
+async def create_cheque_button(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    if not is_allowed(user_id):
+        await message.answer("❌ Не авторизованы.")
+        return
+    await state.clear()
+    await state.set_state(FillReceipt.template)
+    await message.answer("Выберите тип чека:", reply_markup=get_templates_keyboard())
+
+@router.message(F.text == "ℹ️ Помощь")
+async def help_button(message: Message):
+    user_id = message.from_user.id
+    if not is_allowed(user_id):
+        await message.answer("❌ Не авторизованы.")
+        return
+    is_admin = (user_id == ADMIN_ID)
+    await message.answer(
+        "📖 *Справка*\n\n"
+        "1️⃣ Нажмите «Создать чек» и выберите тип.\n"
+        "2️⃣ Следуйте инструкциям бота (пошаговый режим).\n"
+        "3️⃣ Для быстрого ввода используйте /quick.\n\n"
+        "Команды:\n"
+        "/new – пошаговое заполнение\n"
+        "/quick – быстрый ввод\n"
+        "/cancel – отмена\n\n"
+        "Любое поле можно пропустить, отправив «-».",
+        parse_mode="Markdown",
+        reply_markup=get_main_keyboard(is_admin)
+    )
+
+@router.message(F.text == "◀️ Назад в меню")
+async def back_to_menu_button(message: Message, state: FSMContext):
+    await state.clear()
+    user_id = message.from_user.id
+    if not is_allowed(user_id):
+        await message.answer("❌ Не авторизованы.")
+        return
+    is_admin = (user_id == ADMIN_ID)
+    await message.answer("Главное меню:", reply_markup=get_main_keyboard(is_admin))
+
+@router.message(F.text.in_(["📄 Чек по операции (старый)", "📄 Квитанция 17.03 (новый)"]))
+async def template_selection_button(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    if not is_allowed(user_id):
+        await message.answer("❌ Не авторизованы.")
+        return
+    text = message.text
+    if "старый" in text:
+        template_id = TEMPLATE_CLASSIC
+    else:
+        template_id = TEMPLATE_17
+    await state.update_data(template_id=template_id, values={})
+    first_state = _field_order_for_template(template_id)[0]
+    await state.set_state(first_state)
+    await message.answer(
+        f"Выбран: <b>{_TEMPLATE_NAMES[template_id]}</b>\n\n{_prompt_for_state(first_state, template_id)}",
+        parse_mode="HTML",
+        reply_markup=get_cancel_keyboard()
+    )
+
+@router.message(F.text == "❌ Отменить заполнение")
+async def cancel_filling(message: Message, state: FSMContext):
+    await state.clear()
+    user_id = message.from_user.id
+    is_admin = (user_id == ADMIN_ID)
+    await message.answer("Заполнение отменено.", reply_markup=get_main_keyboard(is_admin))
+
+# ---------- АДМИН-ПАНЕЛЬ ----------
+@router.message(F.text == "🛠 Админ панель")
+async def admin_panel_button(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("❌ Нет доступа.")
+        return
+    await message.answer("⚙️ Админ-панель:", reply_markup=get_admin_keyboard())
+
+@router.message(F.text == "🔄 Сбросить всех пользователей")
+async def reset_all_users_button(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    reset_all_users()
+    await message.answer("✅ Список пользователей сброшен.", reply_markup=get_admin_keyboard())
+
+@router.message(F.text == "➕ Добавить ключ")
+async def add_key_prompt(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    msg = await message.answer("Введите новый ключ (одной строкой):")
+    await router.wait_for("message", check=lambda m: m.chat.id == message.chat.id, on_received=add_new_key)
+
+async def add_new_key(message: Message):
+    key = message.text.strip()
+    if not key:
+        await message.answer("❌ Пустой ключ.")
+    elif key in VALID_KEYS:
+        await message.answer("❌ Такой ключ уже существует.")
+    else:
+        VALID_KEYS.add(key)
+        save_keys(VALID_KEYS)
+        await message.answer(f"✅ Ключ `{key}` добавлен.", parse_mode="Markdown")
+    await message.answer("Админ-панель:", reply_markup=get_admin_keyboard())
+
+@router.message(F.text == "🗑 Удалить ключ")
+async def delete_key_prompt(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    msg = await message.answer("Введите ключ, который хотите удалить:")
+    await router.wait_for("message", check=lambda m: m.chat.id == message.chat.id, on_received=delete_key_step)
+
+async def delete_key_step(message: Message):
+    key = message.text.strip()
+    if delete_key_by_admin(key):
+        await message.answer(f"✅ Ключ `{key}` удалён из активных.", parse_mode="Markdown")
+    else:
+        await message.answer(f"❌ Ключ `{key}` не найден.", parse_mode="Markdown")
+    await message.answer("Админ-панель:", reply_markup=get_admin_keyboard())
+
+@router.message(F.text == "📋 Список активных ключей")
+async def active_keys_list(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    if not VALID_KEYS:
+        await message.answer("📭 Активных ключей нет.")
+    else:
+        await message.answer(f"📋 Активные ключи:\n" + "\n".join(VALID_KEYS))
+
+@router.message(F.text == "📜 История использованных")
+async def used_keys_history(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    used = load_used_keys()
+    if not used:
+        await message.answer("📭 История пуста.")
+        return
+    text = "📜 Последние 20 использованных ключей:\n"
+    for item in used[-20:]:
+        text += f"🔑 {item['key']} — @{item['username']} ({item['user_id']}) — {item['timestamp']}\n"
+    await message.answer(text[:4000])
+
+# ---------- ОБРАБОТКА ТЕКСТА (FSM и ключи) ----------
+@router.message(F.text)
+async def handle_text(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    text = message.text.strip()
+    username = message.from_user.username or "no_username"
+
+    # Если пользователь не авторизован – проверяем ключ
+    if not is_allowed(user_id):
+        if text in VALID_KEYS:
+            if consume_key(text, user_id, username):
+                allow_user(user_id)
+                await message.answer("✅ Ключ принят! Добро пожаловать.")
+                is_admin = (user_id == ADMIN_ID)
+                await message.answer("Главное меню:", reply_markup=get_main_keyboard(is_admin))
+            else:
+                await message.answer("❌ Ошибка активации ключа.")
+        else:
+            await message.answer("❌ Неверный или уже использованный ключ.")
+        return
+
+    # Если есть активное состояние FSM – обрабатываем шаг
+    current_state = await state.get_state()
+    if current_state and current_state in _FIELD_BY_STATE:
+        data = await state.get_data()
+        if data.get("quick_mode"):
+            # быстрый режим уже обработан в fallback_text, но на всякий случай
+            return
+        field_name = _FIELD_BY_STATE[current_state]
+        values = data.get("values", {})
+        values[field_name] = _normalize_value(text)
+        await state.update_data(values=values)
+        template_id = data.get("template_id", TEMPLATE_CLASSIC)
+        next_state = _next_state_for_template(current_state, template_id)
+        if next_state is None:
+            # финализация
+            await _finalize(message, state, values)
+        else:
+            await state.set_state(next_state)
+            await message.answer(
+                _prompt_for_state(next_state, template_id),
+                parse_mode="HTML",
+                reply_markup=get_cancel_keyboard()
+            )
+        return
+
+    # Если нет активного состояния – возможно, пользователь ввёл что-то в главном меню
+    await message.answer("Используйте кнопки меню или команды /new, /quick, /help.")
+
+# ---------- ФИНАЛИЗАЦИЯ (генерация PDF) ----------
+async def _finalize(message: Message, state: FSMContext, values: Dict[str, Any]):
+    data = await state.get_data()
+    raw_template = values.pop("template_id", None) or data.get("template_id")
+    template_id = _resolve_template_id(raw_template)
+    pdf_bytes, filename = _render_template_pdf(values, template_id)
+    await message.answer_document(
+        BufferedInputFile(pdf_bytes, filename=filename),
+        caption=f"✅ Готово: <b>{_TEMPLATE_NAMES[template_id]}</b>\nДемонстрационный документ с водяным знаком."
+    )
+    await state.clear()
+    is_admin = (message.from_user.id == ADMIN_ID)
+    await message.answer("Что дальше?", reply_markup=get_main_keyboard(is_admin))
+
+# ---------- ЗАПУСК ----------
 async def main() -> None:
     load_dotenv()
     token = os.getenv("BOT_TOKEN")
     if not token:
-        raise SystemExit(
-            "BOT_TOKEN is not set. Copy .env.example to .env and fill it in."
-        )
+        raise SystemExit("BOT_TOKEN is not set.")
     logging.basicConfig(level=logging.INFO)
+    # Настройка прокси, если нужно
     proxy = os.getenv("TELEGRAM_PROXY", "").strip() or None
     session = AiohttpSession(proxy=proxy) if proxy else None
-    if proxy:
-        logger.info("Using Telegram proxy from TELEGRAM_PROXY")
-    ca_file = os.getenv("TELEGRAM_CA_FILE", "").strip()
-    verify_ssl = os.getenv("TELEGRAM_VERIFY_SSL", "1").strip().lower()
-    if session is None and (ca_file or verify_ssl in {"0", "false", "no", "off"}):
-        session = AiohttpSession()
-    if session is not None and ca_file:
-        session._connector_init["ssl"] = ssl.create_default_context(cafile=ca_file)
-        logger.info("Using custom Telegram CA file from TELEGRAM_CA_FILE")
-    elif session is not None and verify_ssl in {"0", "false", "no", "off"}:
-        session._connector_init["ssl"] = False
-        logger.warning("Telegram SSL verification is disabled by TELEGRAM_VERIFY_SSL")
     bot = Bot(
         token=token,
         session=session,
@@ -507,14 +638,9 @@ async def main() -> None:
     )
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
-    logger.info("Starting bot…")
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
-
 
 if __name__ == "__main__":
     import asyncio
     asyncio.run(main())
-
-
-__all__ = ["main", "router", "FillReceipt", "_parse_quick_message"]
