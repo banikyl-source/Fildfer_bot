@@ -188,7 +188,7 @@ class Receipt17Data:
 PAGE_WIDTH = 270.0
 PAGE_HEIGHT = 519.0
 MARGIN_X = 20.0
-RIGHT_X = 250.0        # ← исправлено (было 249.0)
+RIGHT_X = 250.0
 
 COLOR_TEXT = HexColor("#333333")
 COLOR_MUTED = HexColor("#909090")
@@ -198,15 +198,24 @@ COLOR_STAMP = HexColor("#126cba")
 COLOR_DISCLAIMER = HexColor("#a04040")
 COLOR_WATERMARK = Color(0.85, 0.2, 0.2, alpha=0.09)
 
-# ========== ТОЧНЫЕ КООРДИНАТЫ ОРИГИНАЛА ==========
-DATE_Y = 439.84          # ← исправлено
-TOTAL_Y = 427.00         # ← исправлено
+# ========== АБСОЛЮТНЫЕ КООРДИНАТЫ (ПРОВЕРЕННЫЕ) ==========
+DATE_Y = 439.84
+TOTAL_Y = 427.00
 
-# Основной блок (значения подобраны ранее и идеально совпадают)
-FIRST_ROW_Y = 376.78
-ROW_STEP = 20.1
-
-OPERATION_ID_SECOND_Y = 192.92
+# Вертикальные позиции для строк основного блока (левые названия и правые значения)
+ROW_YS = [
+    385.00,  # Перевод / По номеру телефона
+    365.00,  # Статус / В обработке
+    345.00,  # Сумма / 10 000 ₽
+    324.00,  # Комиссия / Без комиссии
+    304.00,  # Отправитель / Константин Иванов
+    284.00,  # Телефон получателя / +7 (929) 539-13-33
+    264.00,  # Получатель / Галина П.
+    244.00,  # Банк получателя / Яндекс
+    224.00,  # Счет списания / 408178101000****5307
+    204.00,  # Идентификатор операции (первая строка)
+]
+OPERATION_ID_SECOND_Y = 192.92   # для строки "СБП 00117"
 ACCENT_LINE_Y = 397.5
 
 RECEIPT_NUMBER_Y = 67.04
@@ -403,7 +412,7 @@ def render_receipt_17_pdf(data: Receipt17Data) -> bytes:
     _draw_money_right(c, TOTAL_Y, data.total.strip() or "—", TOTAL_SIZE, bold=True)
     _draw_accent_line(c, ACCENT_LINE_Y)
 
-    # Основные строки (9 строк)
+    # Основные строки (первые 9 полей)
     labels = [
         "Перевод", "Статус", "Сумма", "Комиссия", "Отправитель",
         "Телефон получателя", "Получатель", "Банк получателя", "Счет списания"
@@ -414,7 +423,7 @@ def render_receipt_17_pdf(data: Receipt17Data) -> bytes:
     ]
 
     for i, (label, value) in enumerate(zip(labels, values)):
-        y = FIRST_ROW_Y - i * ROW_STEP
+        y = ROW_YS[i]
         if label == "Телефон получателя":
             c.saveState()
             c.setFillColor(HexColor("#ffffff"))
@@ -424,15 +433,13 @@ def render_receipt_17_pdf(data: Receipt17Data) -> bytes:
         _draw_text(c, MARGIN_X, y, label, FONT_REGULAR, LABEL_SIZE)
         _draw_right(c, y, value)
 
-    # Идентификатор операции (первая строка) – рисуем отдельно
-    ident_y = FIRST_ROW_Y - 9 * ROW_STEP   # 376.78 - 9*20.1 = 376.78 - 180.9 = 195.88? Но в выводе у вас 204.1 – значит, я ошибся. Давайте просто используем значение из вашего удачного запуска: 204.10
-    # Лучше явно задать:
-    ident_y = 204.10
+    # Идентификатор операции (первая строка) – отдельно, так как его нет в labels
+    ident_y = ROW_YS[9]   # 204.00
     c.setFillColor(COLOR_TEXT)
     _draw_text(c, MARGIN_X, ident_y, "Идентификатор операции", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, ident_y, data.operation_id_line_1)
 
-    # СБП и код
+    # СБП и код (вторая строка)
     c.setFillColor(COLOR_TEXT)
     _draw_text(c, MARGIN_X, OPERATION_ID_SECOND_Y, data.operation_type, FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, OPERATION_ID_SECOND_Y, data.operation_id_line_2)
