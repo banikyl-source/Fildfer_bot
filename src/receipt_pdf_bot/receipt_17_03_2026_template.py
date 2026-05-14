@@ -198,24 +198,30 @@ COLOR_STAMP = HexColor("#126cba")
 COLOR_DISCLAIMER = HexColor("#a04040")
 COLOR_WATERMARK = Color(0.85, 0.2, 0.2, alpha=0.09)
 
-DATE_Y = 437.84
-TOTAL_Y = 425.00
+# ========== ТОЧНЫЕ КООРДИНАТЫ ИЗ ОРИГИНАЛЬНОГО PDF ==========
+DATE_Y = 439.84
+TOTAL_Y = 427.00
+
+# Вертикальные позиции для каждой строки основного блока
 ROW_Y_VALUES = [
-    383.00,  # Перевод
-    363.00,  # Статус
-    343.00,  # Сумма
-    322.00,  # Комиссия
-    302.00,  # Отправитель
-    282.00,  # Телефон получателя
-    262.00,  # Получатель
-    242.00,  # Банк получателя
-    222.00,  # Счет списания
-    202.00,  # Идентификатор операции
+    385.00,  # Перевод / По номеру телефона
+    365.00,  # Статус / В обработке
+    345.00,  # Сумма / 10 000 ₽
+    324.00,  # Комиссия / Без комиссии
+    304.00,  # Отправитель / Константин Иванов
+    284.00,  # Телефон получателя / +7 (929) 539-13-33
+    264.00,  # Получатель / Галина П.
+    244.00,  # Банк получателя / Яндекс
+    224.00,  # Счет списания / 408178101000****5307
+    204.00,  # Идентификатор операции / длинный номер
 ]
-OPERATION_ID_SECOND_Y = 190.92
-RECEIPT_NUMBER_Y = 65.04
-NOTE_TEXT_Y = 48.04
-SUPPORT_Y = 31.04
+
+OPERATION_ID_SECOND_Y = 192.92   # для строки "СБП 00117"
+ACCENT_LINE_Y = 397.5            # жёлтая линия под "Итого"
+
+RECEIPT_NUMBER_Y = 67.04
+NOTE_TEXT_Y = 50.04
+SUPPORT_Y = 33.04
 
 LABEL_SIZE = 9.0
 VALUE_SIZE = 9.0
@@ -405,39 +411,32 @@ def render_receipt_17_pdf(data: Receipt17Data) -> bytes:
     c.setFillColor(COLOR_TEXT)
     _draw_text(c, 19.0, TOTAL_Y, "Итого", FONT_BOLD, TOTAL_SIZE)
     _draw_money_right(c, TOTAL_Y, data.total.strip() or "—", TOTAL_SIZE, bold=True)
-    _draw_accent_line(c, 397.5)
+    _draw_accent_line(c, ACCENT_LINE_Y)
 
     # Основные строки
-    rows = [
-        (data.transfer_type, "transfer_type"),
-        (data.status, "status"),
-        (data.amount, "amount"),
-        (data.fee, "fee"),
-        (data.sender_name, "sender_name"),
-        (data.recipient_phone, "recipient_phone"),
-        (data.recipient_name, "recipient_name"),
-        (data.recipient_bank, "recipient_bank"),
-        (data.debit_account, "debit_account"),
-    ]
-    # Названия полей
     labels = [
         "Перевод", "Статус", "Сумма", "Комиссия", "Отправитель",
         "Телефон получателя", "Получатель", "Банк получателя", "Счет списания"
     ]
-    for i, (value, _) in enumerate(rows):
+    values = [
+        data.transfer_type, data.status, data.amount, data.fee, data.sender_name,
+        data.recipient_phone, data.recipient_name, data.recipient_bank, data.debit_account
+    ]
+
+    for i, (label, value) in enumerate(zip(labels, values)):
         y = ROW_Y_VALUES[i]
-        # Специальная обработка для телефона получателя: белый прямоугольник
-        if labels[i] == "Телефон получателя":
+        # Белый фон для области телефона получателя
+        if label == "Телефон получателя":
             c.saveState()
             c.setFillColor(HexColor("#ffffff"))
             c.rect(20.0, 176.0, 230.0, 108.0, stroke=0, fill=1)
             c.restoreState()
         c.setFillColor(COLOR_TEXT)
-        _draw_text(c, MARGIN_X, y, labels[i], FONT_REGULAR, LABEL_SIZE)
+        _draw_text(c, MARGIN_X, y, label, FONT_REGULAR, LABEL_SIZE)
         _draw_right(c, y, value)
 
     # Идентификатор операции (первая строка)
-    ident_y = ROW_Y_VALUES[-1]  # 204.00
+    ident_y = ROW_Y_VALUES[-1]  # = 204.00
     c.setFillColor(COLOR_TEXT)
     _draw_text(c, MARGIN_X, ident_y, "Идентификатор операции", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, ident_y, data.operation_id_line_1)
