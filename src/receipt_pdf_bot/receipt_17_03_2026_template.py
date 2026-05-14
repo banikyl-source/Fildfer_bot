@@ -194,8 +194,8 @@ COLOR_DISCLAIMER = HexColor("#a04040")
 COLOR_WATERMARK = Color(0.85, 0.2, 0.2, alpha=0.09)
 
 # ========== КООРДИНАТЫ, СКОРРЕКТИРОВАННЫЕ ПОД ШРИФТ TINKOFF SANS (ОРИГИНАЛ - 8.22) ==========
-DATE_Y = 431.62          # 439.84 - 8.22
-TOTAL_Y = 418.78         # 427.00 - 8.22
+DATE_Y = 439.84          # 439.84 - 8.22
+TOTAL_Y = 427.00         # 427.00 - 8.22
 
 Y_TRANSFER = 376.78      # 385.00 - 8.22
 Y_STATUS = 356.78        # 365.00 - 8.22
@@ -384,7 +384,7 @@ def render_receipt_17_pdf(data: Receipt17Data) -> bytes:
     c.setFillColor(COLOR_TEXT)
     _draw_text(c, 19.0, TOTAL_Y, "Итого", FONT_BOLD, TOTAL_SIZE)
     _draw_money_right(c, TOTAL_Y, data.total.strip() or "—", TOTAL_SIZE, bold=True)
-    _draw_accent_line(c, 397.5 - 8.22)  # 389.28
+    _draw_accent_line(c, 397.5)
 
     # Ручная отрисовка строк
     c.setFillColor(COLOR_TEXT)
