@@ -63,7 +63,7 @@ class AdminActions(StatesGroup):
 TEMPLATE_CLASSIC = "classic"
 TEMPLATE_17 = "receipt_17"
 
-# ---------- ПОЛЯ И ПОРЯДОК ШАГОВ ----------
+# ---------- ПОЛЯ И ПОРЯДОК ШАГОВ (НОВЫЙ ПОРЯДОК) ----------
 _FIELD_BY_STATE = {
     FillReceipt.template.state: "template_id",
     FillReceipt.datetime_text.state: "datetime_text",
@@ -80,30 +80,32 @@ _FIELD_BY_STATE = {
     FillReceipt.receipt_number.state: "receipt_number",
 }
 
+# Для классического шаблона (СберБанк) – без recipient_bank
 _FIELD_ORDER_CLASSIC = (
     FillReceipt.datetime_text,
     FillReceipt.operation,
-    FillReceipt.recipient_name,
-    FillReceipt.recipient_card,
-    FillReceipt.sender_name,
-    FillReceipt.sender_account,
     FillReceipt.amount,
     FillReceipt.fee,
+    FillReceipt.sender_name,
+    FillReceipt.recipient_card,
+    FillReceipt.recipient_name,
+    FillReceipt.sender_account,
     FillReceipt.document_number,
     FillReceipt.auth_code,
     FillReceipt.receipt_number,
 )
 
+# Для шаблона Т-банк – с recipient_bank
 _FIELD_ORDER_FULL = (
     FillReceipt.datetime_text,
     FillReceipt.operation,
-    FillReceipt.recipient_name,
-    FillReceipt.recipient_card,
-    FillReceipt.recipient_bank,
-    FillReceipt.sender_name,
-    FillReceipt.sender_account,
     FillReceipt.amount,
     FillReceipt.fee,
+    FillReceipt.sender_name,
+    FillReceipt.recipient_card,
+    FillReceipt.recipient_name,
+    FillReceipt.recipient_bank,
+    FillReceipt.sender_account,
     FillReceipt.document_number,
     FillReceipt.auth_code,
     FillReceipt.receipt_number,
@@ -267,6 +269,7 @@ def _next_state_for_template(current_state: str, template_id: str) -> Optional[S
 
 def _prompt_for_state(state: State, template_id: str) -> str:
     if template_id != TEMPLATE_17:
+        # Для классического шаблона используем общие подсказки (номера шагов могут не совпадать)
         return _NEXT_PROMPT[state.state]
     field_name = _FIELD_BY_STATE[state.state]
     label, default = _TEMPLATE_17_FIELD_HINTS[field_name]
