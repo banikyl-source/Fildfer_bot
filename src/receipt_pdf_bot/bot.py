@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 # ---------- НАСТРОЙКИ ----------
-ADMIN_ID = 7531804130  # замените на свой ID
+ADMIN_ID = 7531804130  # замените на свой Telegram ID
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     raise SystemExit("BOT_TOKEN is not set.")
@@ -55,7 +55,7 @@ class FillReceipt(StatesGroup):
     auth_code = State()
     receipt_number = State()
 
-# Простые состояния для админ-действий (чтобы не конфликтовать с основным FSM)
+# Простые состояния для админ-действий
 class AdminActions(StatesGroup):
     waiting_for_new_key = State()
     waiting_for_delete_key = State()
@@ -63,7 +63,7 @@ class AdminActions(StatesGroup):
 TEMPLATE_CLASSIC = "classic"
 TEMPLATE_17 = "receipt_17"
 
-# ---------- ПОЛЯ И ПОРЯДОК ШАГОВ (копия из вашего проекта) ----------
+# ---------- ПОЛЯ И ПОРЯДОК ШАГОВ ----------
 _FIELD_BY_STATE = {
     FillReceipt.template.state: "template_id",
     FillReceipt.datetime_text.state: "datetime_text",
@@ -288,6 +288,7 @@ def _resolve_template_id(raw: Optional[str]) -> str:
     return TEMPLATE_CLASSIC
 
 def _render_template_pdf(values: Dict[str, Any], template_id: str) -> tuple[bytes, str]:
+    current_date = datetime.now().strftime("%d.%m.%Y")
     if template_id == TEMPLATE_17:
         defaults = Receipt17Data()
         amount = values.get("amount") or defaults.amount
@@ -309,10 +310,10 @@ def _render_template_pdf(values: Dict[str, Any], template_id: str) -> tuple[byte
             operation_id_line_2=auth,
             receipt_number=receipt_num,
         )
-        return render_receipt_17_pdf(receipt), "receipt-tbank.pdf"
-    # classic
-    receipt_values = {k: v for k, v in values.items() if k in _RECEIPT_DATA_FIELDS and v}
-    return render_receipt_pdf(ReceiptData(**receipt_values)), "receipt-sberbank.pdf"
+        return render_receipt_17_pdf(receipt), f"receipt_{current_date}.pdf"
+    else:
+        receipt_values = {k: v for k, v in values.items() if k in _RECEIPT_DATA_FIELDS and v}
+        return render_receipt_pdf(ReceiptData(**receipt_values)), f"receipt_{current_date}.pdf"
 
 # ---------- ОСНОВНЫЕ ХЕНДЛЕРЫ ----------
 @router.message(CommandStart())
@@ -330,14 +331,13 @@ async def cmd_start(message: Message, state: FSMContext):
             "🔐 Доступ ограничен. Введите лицензионный ключ.\nЕсли у вас нет ключа, обратитесь к администратору."
         )
 
-# Обработка всех текстовых сообщений
 @router.message(F.text)
 async def handle_text(message: Message, state: FSMContext):
     user_id = message.from_user.id
     text = message.text.strip()
     username = message.from_user.username or "no_username"
 
-    # Если не авторизован – проверяем ключ
+    # ---------- НЕ АВТОРИЗОВАН ----------
     if not is_allowed(user_id):
         if text in VALID_KEYS:
             if consume_key(text, user_id, username):
@@ -351,10 +351,9 @@ async def handle_text(message: Message, state: FSMContext):
             await message.answer("❌ Неверный или уже использованный ключ.")
         return
 
-    # Проверяем, находимся ли в режиме ожидания добавления ключа
+    # ---------- АДМИН-ДЕЙСТВИЯ (ожидание ввода) ----------
     current_admin_state = await state.get_state()
     if current_admin_state == AdminActions.waiting_for_new_key.state:
-        # Добавляем любое слово как новый ключ
         new_key = text
         if new_key in VALID_KEYS:
             await message.answer("❌ Такой ключ уже существует.")
@@ -376,7 +375,7 @@ async def handle_text(message: Message, state: FSMContext):
         await message.answer("Админ-панель:", reply_markup=get_admin_keyboard())
         return
 
-    # Обработка кнопок меню
+    # ---------- КНОПКИ МЕНЮ ----------
     if text == "💰 Чеки":
         await state.clear()
         await message.answer("Выберите банк:", reply_markup=get_banks_keyboard())
@@ -415,7 +414,7 @@ async def handle_text(message: Message, state: FSMContext):
         await message.answer("Заполнение отменено.", reply_markup=get_main_keyboard(is_admin))
         return
 
-    # Админские кнопки (без перехода в состояние ожидания – просто вызываем действия)
+    # ---------- АДМИН-КНОПКИ (без перехода в состояние) ----------
     if text == "➕ Добавить ключ" and user_id == ADMIN_ID:
         await state.set_state(AdminActions.waiting_for_new_key)
         await message.answer("Введите новый ключ (любое слово).\nОтправьте текст, и он станет ключом:")
@@ -438,10 +437,10 @@ async def handle_text(message: Message, state: FSMContext):
         if not used:
             await message.answer("📭 История пуста.")
             return
-        text_hist = "📜 Последние 20 использованных ключей:\n"
+        hist_text = "📜 Последние 20 использованных ключей:\n"
         for item in used[-20:]:
-            text_hist += f"🔑 {item['key']} — @{item['username']} ({item['user_id']}) — {item['timestamp']}\n"
-        await message.answer(text_hist[:4000])
+            hist_text += f"🔑 {item['key']} — @{item['username']} ({item['user_id']}) — {item['timestamp']}\n"
+        await message.answer(hist_text[:4000])
         return
 
     if text == "🔄 Сбросить всех пользователей" and user_id == ADMIN_ID:
@@ -449,7 +448,7 @@ async def handle_text(message: Message, state: FSMContext):
         await message.answer("✅ Список пользователей сброшен.")
         return
 
-    # Обработка шагов FSM для чека (если есть активное состояние чека)
+    # ---------- FSM ДЛЯ ЗАПОЛНЕНИЯ ЧЕКА ----------
     current_state = await state.get_state()
     if current_state and current_state in _FIELD_BY_STATE:
         data = await state.get_data()
@@ -460,7 +459,6 @@ async def handle_text(message: Message, state: FSMContext):
         template_id = data.get("template_id", TEMPLATE_CLASSIC)
         next_state = _next_state_for_template(current_state, template_id)
         if next_state is None:
-            # финализация
             pdf_bytes, filename = _render_template_pdf(values, template_id)
             await message.answer_document(
                 BufferedInputFile(pdf_bytes, filename=filename),
@@ -478,7 +476,7 @@ async def handle_text(message: Message, state: FSMContext):
             )
         return
 
-    # Если ничего не подошло
+    # ---------- НЕИЗВЕСТНАЯ КОМАНДА ----------
     await message.answer("Используйте кнопки меню.")
 
 # ---------- ЗАПУСК ----------
@@ -488,7 +486,7 @@ async def main() -> None:
     if not token:
         raise SystemExit("BOT_TOKEN is not set.")
     logging.basicConfig(level=logging.INFO)
-    # Настройка прокси (опционально)
+    # Прокси (опционально)
     proxy = os.getenv("TELEGRAM_PROXY", "").strip() or None
     session = AiohttpSession(proxy=proxy) if proxy else None
     bot = Bot(
