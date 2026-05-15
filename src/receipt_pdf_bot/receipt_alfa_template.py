@@ -13,9 +13,11 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
-# Попробуем загрузить Tahoma, если есть, иначе DejaVuSans
 ASSET_DIR = Path(__file__).parent / "assets"
 FONT_DIR = ASSET_DIR / "fonts"
+ALFA_ASSET_DIR = ASSET_DIR / "alfa"
+
+# Шрифты (сначала Tahoma, потом DejaVuSans)
 FONT_REGULAR = "AlfaRegular"
 FONT_BOLD = "AlfaBold"
 FONT_FALLBACK = "AlfaFallback"
@@ -43,8 +45,7 @@ def _ensure_fonts():
 
 @dataclass
 class AlfaReceiptData:
-    """Все поля для чека Альфа-Банка."""
-    datetime_text: str = "19.11.2025 20:21:45 мск"   # дата и время перевода
+    datetime_text: str = "19.11.2025 20:21:45 мск"
     amount: str = "26 200 RUR"
     recipient_phone: str = "79273364000"
     fee: str = "0 RUR"
@@ -55,16 +56,22 @@ class AlfaReceiptData:
     recipient_name: str = "Роман Павлович Б"
     transfer_message: str = "Перевод денежных средств"
 
-# Размеры страницы (взяты из вашего PDF, при необходимости подкорректируйте)
+# Размер страницы (взято из вашего PDF)
 PAGE_WIDTH = 600.0
 PAGE_HEIGHT = 840.0
 
-# Координаты из extract_coords.py (все значения в pt, Y от нижнего края)
-# Левая колонка (названия)
+# Координаты (все значения из extract_coords.py)
 LEFT_X = 35.45
-RIGHT_X = 304.75   # X для правой колонки
+RIGHT_X = 304.75
 
-# Y‑координаты для левой колонки (названия и значения)
+# Y для "Сформирована" и даты
+HEADER_LABEL_Y = 806.44      # "Сформирована"
+HEADER_DATE_Y = 790.15       # дата
+
+# Заголовок
+TITLE_Y = 736.78
+
+# Левые названия и значения
 LEFT_LABELS_Y = {
     "Сумма перевода": 693.70,
     "Комиссия": 650.80,
@@ -80,7 +87,7 @@ LEFT_VALUES_Y = {
     "recipient_name": 504.71,
 }
 
-# Y‑координаты для правой колонки (названия и значения)
+# Правые названия и значения
 RIGHT_LABELS_Y = {
     "Номер телефона получателя": 693.70,
     "Банк получателя": 650.80,
@@ -96,14 +103,10 @@ RIGHT_VALUES_Y = {
     "transfer_message": 504.71,
 }
 
-# Заголовок и дата формирования (верхний правый угол)
-TITLE_Y = 736.78
-HEADER_Y = 806.44   # "Сформирована"
-HEADER_DATE_Y = 790.15
-
-# Нижние штампы (относительное расположение, оставляем как в исходном шаблоне)
-STAMP1_Y_OFFSET = 60
-STAMP2_Y_OFFSET = 20
+# Нижняя часть: штампы (Y от нижнего края)
+LAST_VALUE_Y = min(list(LEFT_VALUES_Y.values()) + list(RIGHT_VALUES_Y.values()))  # около 504.71
+STAMP1_Y = LAST_VALUE_Y - 40   # примерно 464.71
+STAMP2_Y = STAMP1_Y - 80       # примерно 384.71
 
 def _draw_text(c, x, y, text, font, size, color=HexColor("#000000")):
     c.setFillColor(color)
@@ -114,11 +117,12 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
     _ensure_fonts()
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=(PAGE_WIDTH, PAGE_HEIGHT))
+    current_date = datetime.now().strftime("%d.%m.%Y %H:%M мск")
     c.setTitle(f"alfa_receipt_{datetime.now().strftime('%d.%m.%Y')}.pdf")
 
-    # Верхняя строка: "Сформирована" и текущая дата (можно использовать системную)
-    _draw_text(c, LEFT_X, HEADER_Y, "Сформирована", FONT_REGULAR, 11)
-    _draw_text(c, LEFT_X, HEADER_DATE_Y, datetime.now().strftime("%d.%m.%Y %H:%M мск"), FONT_REGULAR, 11)
+    # Верхняя строка: "Сформирована" и текущая дата
+    _draw_text(c, LEFT_X, HEADER_LABEL_Y, "Сформирована", FONT_REGULAR, 11)
+    _draw_text(c, LEFT_X, HEADER_DATE_Y, current_date, FONT_REGULAR, 11)
 
     # Заголовок
     _draw_text(c, LEFT_X, TITLE_Y, "Квитанция о переводе по СБП", FONT_BOLD, 21)
@@ -143,39 +147,32 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
     _draw_text(c, RIGHT_X, RIGHT_VALUES_Y["sbp_id"], data.sbp_id, FONT_BOLD, 12)
     _draw_text(c, RIGHT_X, RIGHT_VALUES_Y["transfer_message"], data.transfer_message, FONT_BOLD, 12)
 
-    # Штампы (если вы добавите изображения, они будут использованы автоматически)
-    # Для простоты оставим только текст, как в оригинале (его можно заменить на картинки)
-    alfa_asset_dir = ASSET_DIR / "alfa"
-    stamp1_path = alfa_asset_dir / "stamp.png"
-    stamp2_path = alfa_asset_dir / "stamp2.png"
-    y_stamp = min(LEFT_VALUES_Y.values()) - 40  # ниже последнего значения
-
-    if stamp1_path.exists():
-        c.drawImage(str(stamp1_path), LEFT_X, y_stamp - 50, width=200, height=80, preserveAspectRatio=True, mask='auto')
-    else:
-        lines1 = [
-            "АО «АЛЬФА-БАНК»",
-            "БИК 044525593 ИНН 7728168971",
-            "к/сч 30101810200000000593",
-            "",
-            "ПЕРЕВОД ВЫПОЛНЕН"
-        ]
-        for i, line in enumerate(lines1):
-            _draw_text(c, LEFT_X, y_stamp - i*12, line, FONT_REGULAR, 8)
-        y_stamp -= 80
-
-    if stamp2_path.exists():
-        c.drawImage(str(stamp2_path), LEFT_X, y_stamp - 50, width=250, height=60, preserveAspectRatio=True, mask='auto')
-    else:
-        lines2 = [
-            "alfabank.ru",
-            "АО «АЛЬФА-БАНК»",
-            "ул. Каланчёвская, 27, Москва, 107078",
-            "+7 495 620 91 91 / +7 495 974 25 15",
-            "mail@alfabank.ru"
-        ]
-        for i, line in enumerate(lines2):
-            _draw_text(c, LEFT_X, y_stamp - i*12, line, FONT_REGULAR, 8)
+    # --- ШТАМПЫ (текстовые, можно заменить на картинки) ---
+    y = STAMP1_Y
+    lines1 = [
+        "АО «АЛЬФА-БАНК»",
+        "БИК 044525593 ИНН 7728168971",
+        "к/сч 30101810200000000593",
+        "",
+        "ПЕРЕВОД ВЫПОЛНЕН"
+    ]
+    for line in lines1:
+        if line:
+            _draw_text(c, LEFT_X, y, line, FONT_REGULAR, 8)
+        y -= 12
+    # Отступ между штампами
+    y = STAMP2_Y
+    lines2 = [
+        "alfabank.ru",
+        "АО «АЛЬФА-БАНК»",
+        "ул. Каланчёвская, 27, Москва, 107078",
+        "+7 495 620 91 91",
+        "mail@alfabank.ru"
+    ]
+    for line in lines2:
+        if line:
+            _draw_text(c, LEFT_X, y, line, FONT_REGULAR, 8)
+        y -= 12
 
     c.showPage()
     c.save()
