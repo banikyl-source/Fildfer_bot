@@ -1,4 +1,4 @@
-"""Template for Alfa-Bank SBP receipt with logo and stamps."""
+"""Template for Alfa-Bank SBP receipt with exact styles and coordinates."""
 
 from __future__ import annotations
 
@@ -60,16 +60,17 @@ class AlfaReceiptData:
 PAGE_WIDTH = 600.0
 PAGE_HEIGHT = 840.0
 
-# Координаты из оригинала
+# Координаты из оригинала (выверены)
 LEFT_X = 35.45
 RIGHT_X = 304.75
 
-# Логотип (координаты из скриншота: X ≈ 262.85, Y от верха ≈ 771.45 → Y от низа = PAGE_HEIGHT - 771.45)
+# Логотип (опционально)
 LOGO_X = 262.85
-LOGO_Y = PAGE_HEIGHT - 771.45   # ≈ 68.55
+LOGO_Y = PAGE_HEIGHT - 771.45
 LOGO_WIDTH = 35.0
 LOGO_HEIGHT = 35.0
 
+# Верхняя часть
 HEADER_LABEL_Y = 806.44      # "Сформирована"
 HEADER_DATE_Y = 790.15       # дата
 TITLE_Y = 736.78
@@ -82,6 +83,7 @@ LEFT_LABELS = [
     ("Номер операции", 565.02),
     ("Получатель", 522.12),
 ]
+# Левые значения и их Y
 LEFT_VALUES = [
     ("amount", 676.29),
     ("fee", 633.39),
@@ -90,6 +92,7 @@ LEFT_VALUES = [
     ("recipient_name", 504.71),
 ]
 
+# Правые названия и их Y
 RIGHT_LABELS = [
     ("Номер телефона получателя", 693.70),
     ("Банк получателя", 650.80),
@@ -97,6 +100,7 @@ RIGHT_LABELS = [
     ("Идентификатор операции в СБП", 565.02),
     ("Сообщение получателю", 522.12),
 ]
+# Правые значения и их Y
 RIGHT_VALUES = [
     ("recipient_phone", 676.29),
     ("recipient_bank", 633.39),
@@ -105,12 +109,17 @@ RIGHT_VALUES = [
     ("transfer_message", 504.71),
 ]
 
-# Позиции штампов
+# Штампы (Y от нижнего края)
 LAST_Y = 504.71
 STAMP1_Y = LAST_Y - 50
 STAMP2_Y = STAMP1_Y - 90
 
-def _draw_text(c, x, y, text, font, size, color=HexColor("#000000")):
+# Цвета
+COLOR_GRAY = HexColor("#7e7e83")
+COLOR_LIGHT_GRAY = HexColor("#808080")
+COLOR_BLACK = HexColor("#000000")
+
+def _draw_text(c, x, y, text, font, size, color):
     c.setFillColor(color)
     c.setFont(font, size)
     c.drawString(x, y, text)
@@ -122,31 +131,32 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
     current_date = datetime.now().strftime("%d.%m.%Y %H:%M мск")
     c.setTitle(f"alfa_receipt_{datetime.now().strftime('%d.%m.%Y')}.pdf")
 
-    # --- Логотип ---
+    # Логотип (если есть)
     logo_path = ALFA_ASSET_DIR / "logo.png"
     if logo_path.exists():
         c.drawImage(str(logo_path), LOGO_X, LOGO_Y, width=LOGO_WIDTH, height=LOGO_HEIGHT, preserveAspectRatio=True, mask='auto')
 
     # --- Верхняя часть ---
-    _draw_text(c, LEFT_X, HEADER_LABEL_Y, "Сформирована", FONT_REGULAR, 11)
-    _draw_text(c, LEFT_X, HEADER_DATE_Y, current_date, FONT_REGULAR, 11)
-    _draw_text(c, LEFT_X, TITLE_Y, "Квитанция о переводе по СБП", FONT_BOLD, 21)
+    _draw_text(c, LEFT_X, HEADER_LABEL_Y, "Сформирована", FONT_REGULAR, 11, COLOR_GRAY)
+    _draw_text(c, LEFT_X, HEADER_DATE_Y, current_date, FONT_REGULAR, 11, COLOR_GRAY)
+    _draw_text(c, LEFT_X, TITLE_Y, "Квитанция о переводе по СБП", FONT_BOLD, 21, COLOR_BLACK)
 
     # --- Левая колонка ---
     for label, y in LEFT_LABELS:
-        _draw_text(c, LEFT_X, y, label, FONT_REGULAR, 11)
+        _draw_text(c, LEFT_X, y, label, FONT_REGULAR, 11, COLOR_LIGHT_GRAY)
     for field, y in LEFT_VALUES:
         value = getattr(data, field)
-        _draw_text(c, LEFT_X, y, value, FONT_BOLD, 12)
+        _draw_text(c, LEFT_X, y, value, FONT_BOLD, 12, COLOR_BLACK)
 
     # --- Правая колонка ---
     for label, y in RIGHT_LABELS:
-        _draw_text(c, RIGHT_X, y, label, FONT_REGULAR, 11)
+        _draw_text(c, RIGHT_X, y, label, FONT_REGULAR, 11, COLOR_LIGHT_GRAY)
     for field, y in RIGHT_VALUES:
         value = getattr(data, field)
-        _draw_text(c, RIGHT_X, y, value, FONT_BOLD, 12)
+        _draw_text(c, RIGHT_X, y, value, FONT_BOLD, 12, COLOR_BLACK)
 
-    # --- Штампы ---
+    # --- Штампы (текстовые, цвета по умолчанию) ---
+    # Здесь можно заменить на изображения, если они есть
     stamp1_path = ALFA_ASSET_DIR / "stamp.png"
     stamp2_path = ALFA_ASSET_DIR / "stamp2.png"
 
@@ -163,7 +173,7 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
         ]
         for line in lines1:
             if line:
-                _draw_text(c, LEFT_X, y, line, FONT_REGULAR, 8)
+                _draw_text(c, LEFT_X, y, line, FONT_REGULAR, 8, COLOR_BLACK)
             y -= 12
 
     if stamp2_path.exists():
@@ -179,7 +189,7 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
         ]
         for line in lines2:
             if line:
-                _draw_text(c, LEFT_X, y, line, FONT_REGULAR, 8)
+                _draw_text(c, LEFT_X, y, line, FONT_REGULAR, 8, COLOR_BLACK)
             y -= 12
 
     c.showPage()
