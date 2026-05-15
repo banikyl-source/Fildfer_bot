@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 # ---------- НАСТРОЙКИ ----------
-ADMIN_ID = 7531804130
+ADMIN_ID = 7531804130  # замените на свой Telegram ID
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     raise SystemExit("BOT_TOKEN is not set.")
@@ -58,7 +58,7 @@ class FillReceipt(StatesGroup):
     document_number = State()
     auth_code = State()
     receipt_number = State()
-    transfer_message = State()          # новое поле для Альфы
+    transfer_message = State()
 
 class AdminActions(StatesGroup):
     waiting_for_new_key = State()
@@ -86,7 +86,6 @@ _FIELD_BY_STATE = {
     FillReceipt.transfer_message.state: "transfer_message",
 }
 
-# Классический (СберБанк)
 _FIELD_ORDER_CLASSIC = (
     FillReceipt.datetime_text,
     FillReceipt.operation,
@@ -101,7 +100,6 @@ _FIELD_ORDER_CLASSIC = (
     FillReceipt.receipt_number,
 )
 
-# Т-банк (с банком получателя)
 _FIELD_ORDER_FULL = (
     FillReceipt.datetime_text,
     FillReceipt.operation,
@@ -117,21 +115,19 @@ _FIELD_ORDER_FULL = (
     FillReceipt.receipt_number,
 )
 
-# Альфа-Банк (свои поля, без operation, sender_name, recipient_card, receipt_number, зато с transfer_message)
 _FIELD_ORDER_ALFA = (
     FillReceipt.datetime_text,
     FillReceipt.amount,
     FillReceipt.fee,
-    FillReceipt.recipient_card,        # телефон получателя
+    FillReceipt.recipient_card,
     FillReceipt.recipient_bank,
     FillReceipt.sender_account,
-    FillReceipt.document_number,       # номер операции
-    FillReceipt.auth_code,             # идентификатор СБП
+    FillReceipt.document_number,
+    FillReceipt.auth_code,
     FillReceipt.recipient_name,
     FillReceipt.transfer_message,
 )
 
-# Подсказки для Альфы
 _ALFA_PROMPTS = {
     FillReceipt.datetime_text.state: "📅 Введите дату и время перевода (пример: 19.11.2025 20:21:45 мск):",
     FillReceipt.amount.state: "💰 Введите сумму перевода (пример: 26 200 RUR):",
@@ -145,7 +141,6 @@ _ALFA_PROMPTS = {
     FillReceipt.transfer_message.state: "✉️ Введите сообщение получателю (пример: Перевод денежных средств):",
 }
 
-# Общие подсказки (используются для классического и Т-банк)
 _NEXT_PROMPT = {
     FillReceipt.datetime_text.state: "<b>Шаг 1/11.</b> Введите дату и время операции.\nПример: <code>5 апреля 2026 20:29:42 (МСК)</code>",
     FillReceipt.operation.state: "<b>Шаг 2/11.</b> Название операции.\nПример: <code>Перевод клиенту</code>",
@@ -185,10 +180,79 @@ _TEMPLATE_NAMES = {
 
 _RECEIPT_DATA_FIELDS = set(ReceiptData.__dataclass_fields__)
 
-# ---------- СИСТЕМА КЛЮЧЕЙ (без изменений) ----------
-# ... (код load_keys, save_keys, load_used_keys и т.д. остаётся как в вашем bot.py)
-# Я не буду повторять его здесь для краткости, но он должен быть. В финальном коде он есть.
-# Прикладываю полный код с ключами в конце.
+# ---------- СИСТЕМА КЛЮЧЕЙ ----------
+def load_keys() -> Set[str]:
+    if not os.path.exists(KEYS_FILE):
+        with open(KEYS_FILE, "w") as f:
+            f.write("DEMO123\n")
+    with open(KEYS_FILE, "r") as f:
+        return set(line.strip() for line in f if line.strip())
+
+def save_keys(keys_set: Set[str]) -> None:
+    with open(KEYS_FILE, "w") as f:
+        for key in keys_set:
+            f.write(key + "\n")
+
+def load_used_keys() -> List[Dict]:
+    if os.path.exists(USED_KEYS_FILE):
+        with open(USED_KEYS_FILE, "r") as f:
+            return json.load(f)
+    return []
+
+def save_used_keys(used_list: List[Dict]) -> None:
+    with open(USED_KEYS_FILE, "w") as f:
+        json.dump(used_list, f, indent=2, ensure_ascii=False)
+
+def add_used_key(key: str, user_id: int, username: str) -> None:
+    used = load_used_keys()
+    used.append({
+        "key": key,
+        "user_id": user_id,
+        "username": username,
+        "timestamp": datetime.now().isoformat()
+    })
+    save_used_keys(used)
+
+def consume_key(key: str, user_id: int, username: str) -> bool:
+    global VALID_KEYS
+    if key in VALID_KEYS:
+        VALID_KEYS.remove(key)
+        save_keys(VALID_KEYS)
+        add_used_key(key, user_id, username)
+        return True
+    return False
+
+def delete_key_by_admin(key: str) -> bool:
+    global VALID_KEYS
+    if key in VALID_KEYS:
+        VALID_KEYS.remove(key)
+        save_keys(VALID_KEYS)
+        return True
+    return False
+
+def load_allowed_users() -> Set[str]:
+    if os.path.exists(ALLOWED_USERS_FILE):
+        with open(ALLOWED_USERS_FILE, "r") as f:
+            return set(json.load(f))
+    return set()
+
+def save_allowed_users(users: Set[str]) -> None:
+    with open(ALLOWED_USERS_FILE, "w") as f:
+        json.dump(list(users), f)
+
+def is_allowed(user_id: int) -> bool:
+    return str(user_id) in allowed_users
+
+def allow_user(user_id: int) -> None:
+    allowed_users.add(str(user_id))
+    save_allowed_users(allowed_users)
+
+def reset_all_users() -> None:
+    allowed_users.clear()
+    save_allowed_users(allowed_users)
+
+VALID_KEYS = load_keys()
+allowed_users = load_allowed_users()
 
 # ---------- КЛАВИАТУРЫ ----------
 def get_main_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
@@ -327,6 +391,7 @@ async def handle_text(message: Message, state: FSMContext):
     text = message.text.strip()
     username = message.from_user.username or "no_username"
 
+    # ---------- НЕ АВТОРИЗОВАН ----------
     if not is_allowed(user_id):
         if text in VALID_KEYS:
             if consume_key(text, user_id, username):
@@ -339,7 +404,7 @@ async def handle_text(message: Message, state: FSMContext):
             await message.answer("❌ Неверный или уже использованный ключ.")
         return
 
-    # Админ-действия (ожидание ввода)
+    # ---------- АДМИН-ДЕЙСТВИЯ (ожидание ввода) ----------
     current_admin_state = await state.get_state()
     if current_admin_state == AdminActions.waiting_for_new_key.state:
         new_key = text
@@ -363,7 +428,7 @@ async def handle_text(message: Message, state: FSMContext):
         await message.answer("·", reply_markup=get_admin_keyboard())
         return
 
-    # Кнопки меню
+    # ---------- КНОПКИ МЕНЮ ----------
     if text == "💰 Чеки":
         await state.clear()
         await message.answer("·", reply_markup=get_banks_keyboard())
@@ -404,7 +469,7 @@ async def handle_text(message: Message, state: FSMContext):
         await message.answer("·", reply_markup=get_main_keyboard(is_admin))
         return
 
-    # Админ-кнопки
+    # ---------- АДМИН-КНОПКИ (без перехода в состояние) ----------
     if text == "➕ Добавить ключ" and user_id == ADMIN_ID:
         await state.set_state(AdminActions.waiting_for_new_key)
         await message.answer("Введите новый ключ (любое слово).\nОтправьте текст, и он станет ключом:")
@@ -438,7 +503,7 @@ async def handle_text(message: Message, state: FSMContext):
         await message.answer("✅ Список пользователей сброшен.")
         return
 
-    # FSM для заполнения чека
+    # ---------- FSM ДЛЯ ЗАПОЛНЕНИЯ ЧЕКА ----------
     current_state = await state.get_state()
     if current_state and current_state in _FIELD_BY_STATE:
         data = await state.get_data()
@@ -466,13 +531,8 @@ async def handle_text(message: Message, state: FSMContext):
             )
         return
 
+    # ---------- НЕИЗВЕСТНАЯ КОМАНДА ----------
     await message.answer("Используйте кнопки меню.")
-
-# ---------- ФУНКЦИИ КЛЮЧЕЙ ----------
-# (здесь должны быть функции load_keys, save_keys, load_used_keys, save_used_keys,
-# add_used_key, consume_key, delete_key_by_admin, load_allowed_users, save_allowed_users,
-# is_allowed, allow_user, reset_all_users, а также глобальные переменные VALID_KEYS, allowed_users)
-# Я не буду их копировать, так как они у вас уже есть. Вставьте их сюда из вашего текущего bot.py.
 
 # ---------- ЗАПУСК ----------
 async def main() -> None:
