@@ -448,7 +448,7 @@ def render_receipt_17_pdf(data: Receipt17Data) -> bytes:
     _draw_right(c, Y_IDENT_SECOND, data.operation_id_line_2)
 
     # Короткая линия под идентификатором (оставлена как в оригинале)
-    _draw_accent_line(c, 80.0)   # 80.5 - 8.22
+    _draw_accent_line(c, 80.5)   # 80.5 - 8.22
 
     # Нижние элементы
     c.setFillColor(COLOR_TEXT)
