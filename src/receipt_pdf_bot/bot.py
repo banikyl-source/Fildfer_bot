@@ -86,6 +86,7 @@ _FIELD_BY_STATE = {
     FillReceipt.transfer_message.state: "transfer_message",
 }
 
+# --- СберБанк (классический) ---
 _FIELD_ORDER_CLASSIC = (
     FillReceipt.datetime_text,
     FillReceipt.operation,
@@ -100,6 +101,7 @@ _FIELD_ORDER_CLASSIC = (
     FillReceipt.receipt_number,
 )
 
+# --- Т-банк ---
 _FIELD_ORDER_FULL = (
     FillReceipt.datetime_text,
     FillReceipt.operation,
@@ -115,19 +117,21 @@ _FIELD_ORDER_FULL = (
     FillReceipt.receipt_number,
 )
 
+# --- Альфа-Банк ---
 _FIELD_ORDER_ALFA = (
     FillReceipt.datetime_text,
     FillReceipt.amount,
     FillReceipt.fee,
-    FillReceipt.recipient_card,
+    FillReceipt.recipient_card,          # номер телефона получателя
     FillReceipt.recipient_bank,
     FillReceipt.sender_account,
-    FillReceipt.document_number,
-    FillReceipt.auth_code,
+    FillReceipt.document_number,         # номер операции
+    FillReceipt.auth_code,               # идентификатор СБП
     FillReceipt.recipient_name,
     FillReceipt.transfer_message,
 )
 
+# Подсказки для Альфа-Банка
 _ALFA_PROMPTS = {
     FillReceipt.datetime_text.state: "📅 Введите дату и время перевода (пример: 19.11.2025 20:21:45 мск):",
     FillReceipt.amount.state: "💰 Введите сумму перевода (пример: 26 200 RUR):",
@@ -141,6 +145,7 @@ _ALFA_PROMPTS = {
     FillReceipt.transfer_message.state: "✉️ Введите сообщение получателю (пример: Перевод денежных средств):",
 }
 
+# Общие подсказки (СберБанк и Т-банк)
 _NEXT_PROMPT = {
     FillReceipt.datetime_text.state: "<b>Шаг 1/11.</b> Введите дату и время операции.\nПример: <code>5 апреля 2026 20:29:42 (МСК)</code>",
     FillReceipt.operation.state: "<b>Шаг 2/11.</b> Название операции.\nПример: <code>Перевод клиенту</code>",
@@ -291,10 +296,9 @@ def _normalize_value(text: str) -> str:
 def _field_order_for_template(template_id: str):
     if template_id == TEMPLATE_17:
         return _FIELD_ORDER_FULL
-    elif template_id == TEMPLATE_ALFA:
+    if template_id == TEMPLATE_ALFA:
         return _FIELD_ORDER_ALFA
-    else:
-        return _FIELD_ORDER_CLASSIC
+    return _FIELD_ORDER_CLASSIC
 
 def _next_state_for_template(current_state: str, template_id: str) -> Optional[State]:
     states = _field_order_for_template(template_id)
