@@ -339,9 +339,8 @@ async def handle_text(message: Message, state: FSMContext):
         if text in VALID_KEYS:
             if consume_key(text, user_id, username):
                 allow_user(user_id)
-                await message.answer("✅ Ключ принят! Добро пожаловать.")
                 is_admin = (user_id == ADMIN_ID)
-                await message.answer(" ", reply_markup=get_main_keyboard(is_admin))
+                await message.answer("✅ Ключ принят! Добро пожаловать.", reply_markup=get_main_keyboard(is_admin))
             else:
                 await message.answer("❌ Ошибка активации ключа.")
         else:
@@ -497,4 +496,4 @@ async def main() -> None:
 
 if __name__ == "__main__":
     import asyncio
-    asyncio.run(main())
+    asyncio.run(main()
