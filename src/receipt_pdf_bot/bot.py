@@ -322,10 +322,7 @@ async def cmd_start(message: Message, state: FSMContext):
     user_id = message.from_user.id
     if is_allowed(user_id):
         is_admin = (user_id == ADMIN_ID)
-        await message.answer(
-            "👋 Добро пожаловать!",
-            reply_markup=get_main_keyboard(is_admin)
-        )
+        await message.answer("👋 Добро пожаловать!", reply_markup=get_main_keyboard(is_admin))
     else:
         await message.answer(
             "🔐 Доступ ограничен. Введите лицензионный ключ.\nЕсли у вас нет ключа, обратитесь к администратору."
@@ -344,7 +341,7 @@ async def handle_text(message: Message, state: FSMContext):
                 allow_user(user_id)
                 await message.answer("✅ Ключ принят! Добро пожаловать.")
                 is_admin = (user_id == ADMIN_ID)
-                await message.answer("", reply_markup=get_main_keyboard(is_admin))
+                await message.answer(" ", reply_markup=get_main_keyboard(is_admin))
             else:
                 await message.answer("❌ Ошибка активации ключа.")
         else:
@@ -362,7 +359,7 @@ async def handle_text(message: Message, state: FSMContext):
             save_keys(VALID_KEYS)
             await message.answer(f"✅ Ключ `{new_key}` добавлен.", parse_mode="Markdown")
         await state.clear()
-        await message.answer("", reply_markup=get_admin_keyboard())
+        await message.answer(" ", reply_markup=get_admin_keyboard())
         return
 
     if current_admin_state == AdminActions.waiting_for_delete_key.state:
@@ -372,24 +369,24 @@ async def handle_text(message: Message, state: FSMContext):
         else:
             await message.answer(f"❌ Ключ `{key_to_del}` не найден.", parse_mode="Markdown")
         await state.clear()
-        await message.answer("", reply_markup=get_admin_keyboard())
+        await message.answer(" ", reply_markup=get_admin_keyboard())
         return
 
     # ---------- КНОПКИ МЕНЮ ----------
     if text == "💰 Чеки":
         await state.clear()
-        await message.answer("", reply_markup=get_banks_keyboard())
+        await message.answer(" ", reply_markup=get_banks_keyboard())
         return
 
     if text == "⚙️ Админ панель" and user_id == ADMIN_ID:
         await state.clear()
-        await message.answer("", reply_markup=get_admin_keyboard())
+        await message.answer(" ", reply_markup=get_admin_keyboard())
         return
 
     if text == "◀️ Назад в меню":
         await state.clear()
         is_admin = (user_id == ADMIN_ID)
-        await message.answer("", reply_markup=get_main_keyboard(is_admin))
+        await message.answer(" ", reply_markup=get_main_keyboard(is_admin))
         return
 
     if text in ("Т-банк", "СберБанк"):
@@ -411,7 +408,7 @@ async def handle_text(message: Message, state: FSMContext):
     if text == "❌ Отменить заполнение":
         await state.clear()
         is_admin = (user_id == ADMIN_ID)
-        await message.answer("", reply_markup=get_main_keyboard(is_admin))
+        await message.answer(" ", reply_markup=get_main_keyboard(is_admin))
         return
 
     # ---------- АДМИН-КНОПКИ (без перехода в состояние) ----------
@@ -466,7 +463,7 @@ async def handle_text(message: Message, state: FSMContext):
             )
             await state.clear()
             is_admin = (user_id == ADMIN_ID)
-            await message.answer("", reply_markup=get_main_keyboard(is_admin))
+            await message.answer(" ", reply_markup=get_main_keyboard(is_admin))
         else:
             await state.set_state(next_state)
             await message.answer(
