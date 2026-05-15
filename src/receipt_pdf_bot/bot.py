@@ -230,7 +230,7 @@ def get_main_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
 
 def get_banks_keyboard() -> ReplyKeyboardMarkup:
     buttons = [
-        [KeyboardButton(text="Т-банк 🏦"), KeyboardButton(text="СберБанк 🏦")],
+        [KeyboardButton(text="Т-банк"), KeyboardButton(text="СберБанк")],
         [KeyboardButton(text="◀️ Назад в меню")]
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
@@ -323,7 +323,7 @@ async def cmd_start(message: Message, state: FSMContext):
     if is_allowed(user_id):
         is_admin = (user_id == ADMIN_ID)
         await message.answer(
-            "👋 Добро пожаловать!\nВыберите действие:",
+            "👋 Добро пожаловать!",
             reply_markup=get_main_keyboard(is_admin)
         )
     else:
@@ -344,7 +344,7 @@ async def handle_text(message: Message, state: FSMContext):
                 allow_user(user_id)
                 await message.answer("✅ Ключ принят! Добро пожаловать.")
                 is_admin = (user_id == ADMIN_ID)
-                await message.answer("Главное меню:", reply_markup=get_main_keyboard(is_admin))
+                await message.answer("", reply_markup=get_main_keyboard(is_admin))
             else:
                 await message.answer("❌ Ошибка активации ключа.")
         else:
@@ -362,7 +362,7 @@ async def handle_text(message: Message, state: FSMContext):
             save_keys(VALID_KEYS)
             await message.answer(f"✅ Ключ `{new_key}` добавлен.", parse_mode="Markdown")
         await state.clear()
-        await message.answer("Админ-панель:", reply_markup=get_admin_keyboard())
+        await message.answer("", reply_markup=get_admin_keyboard())
         return
 
     if current_admin_state == AdminActions.waiting_for_delete_key.state:
@@ -372,27 +372,27 @@ async def handle_text(message: Message, state: FSMContext):
         else:
             await message.answer(f"❌ Ключ `{key_to_del}` не найден.", parse_mode="Markdown")
         await state.clear()
-        await message.answer("Админ-панель:", reply_markup=get_admin_keyboard())
+        await message.answer("", reply_markup=get_admin_keyboard())
         return
 
     # ---------- КНОПКИ МЕНЮ ----------
     if text == "💰 Чеки":
         await state.clear()
-        await message.answer("Выберите банк:", reply_markup=get_banks_keyboard())
+        await message.answer("", reply_markup=get_banks_keyboard())
         return
 
     if text == "⚙️ Админ панель" and user_id == ADMIN_ID:
         await state.clear()
-        await message.answer("Админ-панель:", reply_markup=get_admin_keyboard())
+        await message.answer("", reply_markup=get_admin_keyboard())
         return
 
     if text == "◀️ Назад в меню":
         await state.clear()
         is_admin = (user_id == ADMIN_ID)
-        await message.answer("Главное меню:", reply_markup=get_main_keyboard(is_admin))
+        await message.answer("", reply_markup=get_main_keyboard(is_admin))
         return
 
-    if text in ("Т-банк 🏦", "СберБанк 🏦"):
+    if text in ("Т-банк", "СберБанк"):
         if "Т-банк" in text:
             template_id = TEMPLATE_17
         else:
@@ -411,7 +411,7 @@ async def handle_text(message: Message, state: FSMContext):
     if text == "❌ Отменить заполнение":
         await state.clear()
         is_admin = (user_id == ADMIN_ID)
-        await message.answer("Заполнение отменено.", reply_markup=get_main_keyboard(is_admin))
+        await message.answer("", reply_markup=get_main_keyboard(is_admin))
         return
 
     # ---------- АДМИН-КНОПКИ (без перехода в состояние) ----------
@@ -462,11 +462,11 @@ async def handle_text(message: Message, state: FSMContext):
             pdf_bytes, filename = _render_template_pdf(values, template_id)
             await message.answer_document(
                 BufferedInputFile(pdf_bytes, filename=filename),
-                caption=f"✅ Готово: <b>{_TEMPLATE_NAMES[template_id]}</b>\nДемонстрационный документ."
+                caption=f"✅ Готово: <b>{_TEMPLATE_NAMES[template_id]}</b>"
             )
             await state.clear()
             is_admin = (user_id == ADMIN_ID)
-            await message.answer("Что дальше?", reply_markup=get_main_keyboard(is_admin))
+            await message.answer("", reply_markup=get_main_keyboard(is_admin))
         else:
             await state.set_state(next_state)
             await message.answer(
@@ -486,7 +486,6 @@ async def main() -> None:
     if not token:
         raise SystemExit("BOT_TOKEN is not set.")
     logging.basicConfig(level=logging.INFO)
-    # Прокси (опционально)
     proxy = os.getenv("TELEGRAM_PROXY", "").strip() or None
     session = AiohttpSession(proxy=proxy) if proxy else None
     bot = Bot(
