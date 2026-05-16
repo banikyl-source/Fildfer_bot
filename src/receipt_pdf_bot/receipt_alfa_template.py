@@ -1,4 +1,4 @@
-"""Template for Alfa-Bank SBP receipt – corrected right-aligned header."""
+"""Template for Alfa-Bank SBP receipt – exact coordinates for all elements."""
 
 from __future__ import annotations
 
@@ -48,20 +48,19 @@ class AlfaReceiptData:
 PAGE_WIDTH = 600.0
 PAGE_HEIGHT = 840.0
 
-# === ОРИГИНАЛЬНЫЕ КООРДИНАТЫ ===
+# === ТЕКСТОВЫЕ КООРДИНАТЫ (Y от нижнего края) ===
 LEFT_X = 35.45
 RIGHT_X = 304.75
 
-# Верхние тексты (теперь справа)
+# Верхние тексты (справа)
 HEADER_LABEL_X = 484.40
 HEADER_LABEL_Y = PAGE_HEIGHT - 37.975   # 802.025
 HEADER_DATE_X = 453.998
 HEADER_DATE_Y = PAGE_HEIGHT - 54.467    # 785.533
 
-# Заголовок остаётся слева
 TITLE_Y = 736.78
 
-# Левые названия и значения (без изменений)
+# Левые названия и значения
 LEFT_LABELS = [
     ("Сумма перевода", 693.70),
     ("Комиссия", 650.80),
@@ -93,19 +92,20 @@ RIGHT_VALUES = [
     ("transfer_message", 504.71),
 ]
 
-# Логотип и штампы (координаты из ваших данных)
+# === ИЗОБРАЖЕНИЯ ===
+# Координаты НИЖНЕГО ЛЕВОГО УГЛА. Подберите значения Y, если необходимо.
 LOGO_X = 35.45
-LOGO_Y = PAGE_HEIGHT - 35.45
+LOGO_Y = 769.55        # (840 - 35.45 - 35) – верхний край на 35.45
 LOGO_WIDTH = 35.0
 LOGO_HEIGHT = 35.0
 
 STAMP1_X = 35.45
-STAMP1_Y = PAGE_HEIGHT - 386.323
+STAMP1_Y = 373.68       # (840 - 386.323 - 80)
 STAMP1_WIDTH = 250.0
 STAMP1_HEIGHT = 80.0
 
 STAMP2_X = 262.85
-STAMP2_Y = PAGE_HEIGHT - 771.45
+STAMP2_Y = 68.55        # (840 - 771.45) без вычитания высоты (высота 70 даст верхний край ~771.45)
 STAMP2_WIDTH = 250.0
 STAMP2_HEIGHT = 70.0
 
