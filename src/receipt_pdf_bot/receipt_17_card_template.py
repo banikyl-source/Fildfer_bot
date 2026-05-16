@@ -1,4 +1,4 @@
-"""Template for T-Bank card transfer receipt (based on phone receipt layout)."""
+"""Template for T-Bank card transfer receipt – exact coordinates from Master PDF Editor."""
 
 from __future__ import annotations
 
@@ -161,67 +161,113 @@ class Receipt17CardData:
     recipient_card: str = "220220******7357"
     recipient_name: str = "Ильяс А."
     recipient_bank: str = "Сбербанк"
-    # поля для совместимости с FSM (не выводятся)
-    debit_account: str = ""
-    operation_id_line_1: str = ""
-    operation_id_line_2: str = ""
-    operation_type: str = ""
     receipt_number: str = "№ 1-127-176-643-532"
     support_label: str = "Служба поддержки"
     support_email: str = "fb@tbank.ru"
     note_text: str = "По вопросам зачисления обращайтесь к получателю"
 
+# Размер страницы (из ваших измерений)
 PAGE_WIDTH = 270.0
-PAGE_HEIGHT = 471.0          # точная высота оригинала
-MARGIN_X = 20.0
-RIGHT_X = 250.0
+PAGE_HEIGHT = 471.0
 
-COLOR_TEXT = HexColor("#333333")
-COLOR_MUTED = HexColor("#909090")
-COLOR_ACCENT = HexColor("#ffdd2d")
-COLOR_LINK = HexColor("#1771d6")
-COLOR_STAMP = HexColor("#126cba")
-COLOR_DISCLAIMER = HexColor("#a04040")
-COLOR_WATERMARK = Color(0.85, 0.2, 0.2, alpha=0.09)
+# Вспомогательная функция пересчёта Y (верхний левый угол в PDF → нижний левый угол в reportlab)
+def y_from_top(top: float, height: float = 0) -> float:
+    if height == 0:
+        return PAGE_HEIGHT - top
+    else:
+        return PAGE_HEIGHT - top - height
 
-# Координаты (уже подогнаны под TinkoffSans и работают)
-DATE_Y = 432.5
-TOTAL_Y = 412.4
-TOTAL_RIGHT_X = 249.0
+# === Логотип ===
+LOGO_X = 121.0
+LOGO_Y = y_from_top(28.0, 28.0)   # 471 - 28 - 28 = 415
+LOGO_WIDTH = 28.0
+LOGO_HEIGHT = 28.0
 
-Y_TRANSFER = 376.78
-Y_STATUS = 356.78
-Y_AMOUNT = 336.78
-Y_FEE = 315.78
-Y_SENDER = 295.78
-Y_RECIPIENT_CARD = 275.78
-Y_RECIPIENT_NAME = 255.78
-Y_RECIPIENT_BANK = 235.78
+# === Штамп ===
+STAMP_X = 66.0
+STAMP_Y = y_from_top(304.0, 63.23)  # 471 - 304 - 63.23 = 103.77
+STAMP_WIDTH = 175.0
+STAMP_HEIGHT = 63.23
 
-Y_RECEIPT_NUMBER = 90.0
-Y_NOTE = 73.0
-Y_SUPPORT = 56.0
-Y_BOTTOM_LINE = Y_RECEIPT_NUMBER - 10   # 80.0
+# === Верхняя жёлтая линия ===
+TOP_LINE_X = 19.0
+TOP_LINE_Y = y_from_top(120.5, 2.0)   # 471 - 120.5 - 2 = 348.5
+TOP_LINE_WIDTH = 232.0
+TOP_LINE_HEIGHT = 2.0
 
-LABEL_SIZE = 9.0
-VALUE_SIZE = 9.0
+# === Нижняя жёлтая линия ===
+BOTTOM_LINE_X = 19.0
+BOTTOM_LINE_Y = y_from_top(389.5, 2.0)   # 471 - 389.5 - 2 = 79.5
+BOTTOM_LINE_WIDTH = 232.0
+BOTTOM_LINE_HEIGHT = 2.0
+
+# === Тексты: Y = PAGE_HEIGHT - top (baseline будет чуть выше, но для начала так) ===
+DATE_X = 20.648
+DATE_Y = PAGE_HEIGHT - 81.1   # 389.9
+DATE_FONT = FONT_REGULAR
+DATE_SIZE = 8.0
+
+TOTAL_X = 20.120
+TOTAL_Y = PAGE_HEIGHT - 96.082   # 374.918
+TOTAL_FONT = FONT_BOLD
 TOTAL_SIZE = 16.0
-WATERMARK_SIZE = 44.0
-WATERMARK_SPACING = 118.0
 
-def _draw_accent_line(c: canvas.Canvas, y: float) -> None:
+AMOUNT_X = 218.260
+AMOUNT_Y = PAGE_HEIGHT - 95.842   # 375.158
+AMOUNT_FONT = FONT_BOLD
+AMOUNT_SIZE = 16.0
+
+RUBLE_X = 239.913
+RUBLE_Y = PAGE_HEIGHT - 95.143   # 375.857
+RUBLE_FONT = FONT_RUBLE_BOLD
+RUBLE_SIZE = 16.0
+
+# Основные поля (левый столбец – названия, правый – значения)
+# Используем координаты левого верхнего угла для каждого текста
+# Для reportlab удобнее использовать одинаковый y для пары (название и значение)
+# Будем рисовать оба текста на одной высоте y = PAGE_HEIGHT - top
+# где top – это Y верхнего края для левого текста (так как они обычно на одной строке)
+
+FIELDS = [
+    # (левое название, левая X, верхний Y левого, правое значение, правая X, верхний Y правого, размер шрифта)
+    ("Перевод", 20.783, 136.298, "transfer_type", 186.833, 136.298, 9.0),
+    ("Статус", 20.432, 156.217, "status", 216.777, 156.298, 9.0),
+    ("Сумма", 20.432, 176.217, "amount", 233.489, 176.217, 9.0),  # значение "10 000", но оно рисуется отдельно плюс рубль
+    ("Комиссия", 20.783, 197.298, "fee", 198.883, 197.298, 9.0),
+    ("Отправитель", 20.432, 217.217, "sender_name", 183.665, 217.298, 9.0),
+    ("Карта получателя", 20.783, 237.298, "recipient_card", 181.447, 237.082, 9.0),
+    ("Получатель", 20.783, 257.298, "recipient_name", 219.063, 257.298, 9.0),
+    ("Банк получателя", 20.783, 277.298, "recipient_bank", 214.152, 276.569, 9.0),
+]
+
+# Дополнительные элементы: сумма (число) и символ рубля
+# Для суммы отдельный текст "10 000" и символ "i"
+AMOUNT_NUMBER_X = 233.489
+AMOUNT_NUMBER_Y = PAGE_HEIGHT - 176.217   # 294.783
+RUBLE_SIGN_X = 245.036
+RUBLE_SIGN_Y = PAGE_HEIGHT - 175.920      # 295.08
+
+# Нижние тексты
+RECEIPT_X = 20.783
+RECEIPT_Y = PAGE_HEIGHT - 406.150   # 64.85
+NOTE_X = 20.783
+NOTE_Y = PAGE_HEIGHT - 422.529      # 48.471
+SUPPORT_LABEL_X = 20.432
+SUPPORT_LABEL_Y = PAGE_HEIGHT - 439.529   # 31.471
+SUPPORT_EMAIL_X = 92.640
+SUPPORT_EMAIL_Y = PAGE_HEIGHT - 437.180   # 33.82
+
+def _draw_accent_line(c: canvas.Canvas, x: float, y: float, width: float) -> None:
     c.setStrokeColor(COLOR_ACCENT)
     c.setLineWidth(1.0)
-    c.line(19.0, y, 249.0, y)
+    c.line(x, y, x + width, y)
 
 def _draw_demo_icon(c: canvas.Canvas) -> None:
     if LOGO_PATH.exists():
         c.drawImage(
             ImageReader(str(LOGO_PATH)),
-            121.0,
-            463.0,
-            width=28.0,
-            height=28.0,
+            LOGO_X, LOGO_Y,
+            width=LOGO_WIDTH, height=LOGO_HEIGHT,
             preserveAspectRatio=True,
             mask="auto",
         )
@@ -245,47 +291,27 @@ def _draw_demo_stamp(c: canvas.Canvas) -> None:
     if STAMP_PATH.exists():
         c.drawImage(
             ImageReader(str(STAMP_PATH)),
-            66.0,
-            103.77,
-            width=175.0,
-            height=63.23,
+            STAMP_X, STAMP_Y,
+            width=STAMP_WIDTH, height=STAMP_HEIGHT,
             preserveAspectRatio=True,
             mask="auto",
         )
         return
+    # fallback – текст
     c.saveState()
-    x = 66.0
-    y = 103.77
-    w = 175.0
-    h = 63.23
-    c.setStrokeColor(COLOR_STAMP)
+    x = STAMP_X
+    y = STAMP_Y + STAMP_HEIGHT - 12
     c.setFillColor(COLOR_STAMP)
-    c.setLineWidth(1.0)
-    c.rect(x + 32.0, y + 10.0, w - 34.0, h - 12.0, stroke=1, fill=0)
-    _draw_right_text(c, x + w - 13.0, y + 47.0, "ДЕМО-БАНК", FONT_BOLD, 15.0)
-    _draw_right_text(c, x + w - 13.0, y + 31.0, "БИК 000000000 ИНН 0000000000", FONT_BOLD, 10.5)
-    _draw_right_text(c, x + w - 13.0, y + 17.0, "", FONT_BOLD, 10.5)
-    c.setLineWidth(1.8)
-    c.line(x - 7.0, y + 9.0, x + 72.0, y + 35.0)
-    c.line(x - 1.0, y + 17.0, x + 57.0, y + 5.0)
-    c.line(x + 14.0, y + 29.0, x + 76.0, y + 18.0)
+    _draw_text(c, x, y, "ДЕМО-БАНК", FONT_BOLD, 12)
+    y -= 12
+    _draw_text(c, x, y, "БИК 000000000 ИНН 0000000000", FONT_REGULAR, 8)
     c.restoreState()
 
-def _draw_right(c: canvas.Canvas, y: float, value: str, size: float = VALUE_SIZE) -> None:
-    if value.strip().endswith("₽"):
-        _draw_money_right(c, y, value, size, bold=False)
-        return
+def _draw_right(c: canvas.Canvas, x: float, y: float, value: str, size: float = 9.0) -> None:
     c.setFillColor(COLOR_TEXT)
-    _draw_right_text(c, RIGHT_X, y, value.strip() or "—", FONT_REGULAR, size)
+    _draw_text(c, x, y, value, FONT_REGULAR, size)
 
-def _draw_money_right(
-    c: canvas.Canvas,
-    y: float,
-    value: str,
-    size: float,
-    *,
-    bold: bool,
-) -> None:
+def _draw_money_right(c: canvas.Canvas, x: float, y: float, value: str, size: float, bold: bool = False) -> None:
     amount = value.strip().removesuffix("₽").rstrip()
     ruble = "i"
     amount_font = FONT_BOLD if bold else FONT_REGULAR
@@ -293,23 +319,12 @@ def _draw_money_right(
     ruble_width = c.stringWidth(ruble, ruble_font, size)
     amount_text = amount + " "
     amount_width = _mixed_text_width(c, amount_text, amount_font, size)
-    start_x = RIGHT_X - amount_width - ruble_width
+    start_x = x - amount_width - ruble_width
     c.setFillColor(COLOR_TEXT)
     _draw_text(c, start_x, y, amount_text, amount_font, size)
-    if bold:
-        _draw_bold_ruble(c, start_x + amount_width, y, ruble, ruble_font, size)
-    else:
-        c.setFont(ruble_font, size)
-        c.drawString(start_x + amount_width, y, ruble)
+    _draw_bold_ruble(c, start_x + amount_width, y, ruble, ruble_font, size)
 
-def _draw_bold_ruble(
-    c: canvas.Canvas,
-    x: float,
-    y: float,
-    text: str,
-    font_name: str,
-    size: float,
-) -> None:
+def _draw_bold_ruble(c: canvas.Canvas, x: float, y: float, text: str, font_name: str, size: float) -> None:
     c.saveState()
     c.setFillColor(COLOR_TEXT)
     c.setStrokeColor(COLOR_TEXT)
@@ -321,10 +336,16 @@ def _draw_bold_ruble(
     c.drawText(text_obj)
     c.restoreState()
 
-def _draw_pair(c: canvas.Canvas, y: float, label: str, value: str) -> None:
-    c.setFillColor(COLOR_TEXT)
-    _draw_text(c, MARGIN_X, y, label, FONT_REGULAR, LABEL_SIZE)
-    _draw_right(c, y, value)
+COLOR_TEXT = HexColor("#333333")
+COLOR_MUTED = HexColor("#909090")
+COLOR_ACCENT = HexColor("#ffdd2d")
+COLOR_LINK = HexColor("#1771d6")
+COLOR_STAMP = HexColor("#126cba")
+COLOR_DISCLAIMER = HexColor("#a04040")
+COLOR_WATERMARK = Color(0.85, 0.2, 0.2, alpha=0.09)
+
+WATERMARK_SIZE = 44.0
+WATERMARK_SPACING = 118.0
 
 def _draw_watermark(c: canvas.Canvas) -> None:
     c.saveState()
@@ -354,68 +375,50 @@ def render_receipt_17_card_pdf(data: Receipt17CardData) -> bytes:
     c.setSubject("Демонстрационная квитанция, не имеет юридической силы")
 
     _draw_watermark(c)
-    _draw_demo_icon(c)      # логотип
-
-    c.setFillColor(COLOR_MUTED)
-    _draw_text(c, MARGIN_X, DATE_Y, data.datetime_text.strip() or "—", FONT_REGULAR, 8.0)
-
-    c.setFillColor(COLOR_TEXT)
-    _draw_text(c, 19.0, TOTAL_Y, "Итого", FONT_BOLD, TOTAL_SIZE)
-    amount = data.total.strip().removesuffix("₽").rstrip()
-    ruble = "i"
-    ruble_width = c.stringWidth(ruble, FONT_RUBLE_BOLD, TOTAL_SIZE)
-    amount_text = amount + " "
-    amount_width = _mixed_text_width(c, amount_text, FONT_BOLD, TOTAL_SIZE)
-    start_x = TOTAL_RIGHT_X - amount_width - ruble_width
-    c.setFillColor(COLOR_TEXT)
-    _draw_text(c, start_x, TOTAL_Y, amount_text, FONT_BOLD, TOTAL_SIZE)
-    _draw_bold_ruble(c, start_x + amount_width, TOTAL_Y, ruble, FONT_RUBLE_BOLD, TOTAL_SIZE)
-    _draw_accent_line(c, 397.5)
-
-    c.setFillColor(COLOR_TEXT)
-
-    _draw_text(c, MARGIN_X, Y_TRANSFER, "Перевод", FONT_REGULAR, LABEL_SIZE)
-    _draw_right(c, Y_TRANSFER, data.transfer_type)
-
-    _draw_text(c, MARGIN_X, Y_STATUS, "Статус", FONT_REGULAR, LABEL_SIZE)
-    _draw_right(c, Y_STATUS, data.status)
-
-    _draw_text(c, MARGIN_X, Y_AMOUNT, "Сумма", FONT_REGULAR, LABEL_SIZE)
-    _draw_right(c, Y_AMOUNT, data.amount)
-
-    _draw_text(c, MARGIN_X, Y_FEE, "Комиссия", FONT_REGULAR, LABEL_SIZE)
-    _draw_right(c, Y_FEE, data.fee)
-
-    _draw_text(c, MARGIN_X, Y_SENDER, "Отправитель", FONT_REGULAR, LABEL_SIZE)
-    _draw_right(c, Y_SENDER, data.sender_name)
-
-    c.saveState()
-    c.setFillColor(HexColor("#ffffff"))
-    c.rect(20.0, 176.0, 230.0, 108.0, stroke=0, fill=1)
-    c.restoreState()
-    _draw_text(c, MARGIN_X, Y_RECIPIENT_CARD, "Карта получателя", FONT_REGULAR, LABEL_SIZE)
-    _draw_right(c, Y_RECIPIENT_CARD, data.recipient_card)
-
-    _draw_text(c, MARGIN_X, Y_RECIPIENT_NAME, "Получатель", FONT_REGULAR, LABEL_SIZE)
-    _draw_right(c, Y_RECIPIENT_NAME, data.recipient_name)
-
-    _draw_text(c, MARGIN_X, Y_RECIPIENT_BANK, "Банк получателя", FONT_REGULAR, LABEL_SIZE)
-    _draw_right(c, Y_RECIPIENT_BANK, data.recipient_bank)
-
-    _draw_accent_line(c, Y_BOTTOM_LINE)
-
-    c.setFillColor(COLOR_TEXT)
-    _draw_text(c, MARGIN_X, Y_RECEIPT_NUMBER, f"Квитанция  {data.receipt_number}", FONT_REGULAR, VALUE_SIZE)
-    c.setFillColor(COLOR_MUTED)
-    _draw_text(c, MARGIN_X, Y_NOTE, data.note_text, FONT_REGULAR, VALUE_SIZE)
-    support_label = data.support_label + " "
-    _draw_text(c, MARGIN_X, Y_SUPPORT, support_label, FONT_REGULAR, VALUE_SIZE)
-    support_width = _mixed_text_width(c, support_label, FONT_REGULAR, VALUE_SIZE)
-    c.setFillColor(COLOR_LINK)
-    _draw_text(c, MARGIN_X + support_width, Y_SUPPORT, data.support_email, FONT_REGULAR, VALUE_SIZE)
-
+    _draw_demo_icon(c)
     _draw_demo_stamp(c)
 
+    # Дата
+    c.setFillColor(COLOR_MUTED)
+    _draw_text(c, DATE_X, DATE_Y, data.datetime_text.strip() or "—", DATE_FONT, DATE_SIZE)
+
+    # Итого
+    c.setFillColor(COLOR_TEXT)
+    _draw_text(c, TOTAL_X, TOTAL_Y, "Итого", TOTAL_FONT, TOTAL_SIZE)
+    # Сумма итога (справа)
+    _draw_money_right(c, PAGE_WIDTH - 10, TOTAL_Y, data.total, TOTAL_SIZE, bold=True)  # используем простой метод
+
+    # Верхняя жёлтая линия
+    _draw_accent_line(c, TOP_LINE_X, TOP_LINE_Y, TOP_LINE_WIDTH)
+
+    # Основные поля
+    for label, label_x, label_top, value_field, value_x, value_top, size in FIELDS:
+        y = PAGE_HEIGHT - label_top
+        # левый текст
+        _draw_text(c, label_x, y, label, FONT_REGULAR, size)
+        # правый текст
+        value = getattr(data, value_field)
+        _draw_text(c, value_x, y, value, FONT_REGULAR, size)
+
+    # Сумма (число и рубль) – отдельно
+    _draw_text(c, AMOUNT_NUMBER_X, AMOUNT_NUMBER_Y, "10 000", FONT_BOLD, 9.0)
+    _draw_text(c, RUBLE_SIGN_X, RUBLE_SIGN_Y, "i", FONT_RUBLE_BOLD, 9.0)
+
+    # Нижняя жёлтая линия
+    _draw_accent_line(c, BOTTOM_LINE_X, BOTTOM_LINE_Y, BOTTOM_LINE_WIDTH)
+
+    # Нижние тексты
+    c.setFillColor(COLOR_TEXT)
+    _draw_text(c, RECEIPT_X, RECEIPT_Y, f"Квитанция  {data.receipt_number}", FONT_REGULAR, 9.0)
+    c.setFillColor(COLOR_MUTED)
+    _draw_text(c, NOTE_X, NOTE_Y, data.note_text, FONT_REGULAR, 9.0)
+    support_label = data.support_label + " "
+    c.setFillColor(COLOR_TEXT)
+    _draw_text(c, SUPPORT_LABEL_X, SUPPORT_LABEL_Y, support_label, FONT_REGULAR, 9.0)
+    c.setFillColor(COLOR_LINK)
+    _draw_text(c, SUPPORT_EMAIL_X, SUPPORT_EMAIL_Y, data.support_email, FONT_REGULAR, 9.0)
+
+    # Нижняя рамка
     c.setStrokeColor(HexColor("#c2c2c2"))
     c.setLineWidth(0.25)
     c.line(1.0, 1.0, PAGE_WIDTH - 1.0, 1.0)
