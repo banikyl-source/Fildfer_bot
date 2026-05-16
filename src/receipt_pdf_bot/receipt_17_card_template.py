@@ -161,13 +161,18 @@ class Receipt17CardData:
     recipient_card: str = "220220******7357"
     recipient_name: str = "Ильяс А."
     recipient_bank: str = "Сбербанк"
+    # Поля для совместимости с FSM (в PDF не выводятся)
+    debit_account: str = ""
+    operation_id_line_1: str = ""
+    operation_id_line_2: str = ""
+    operation_type: str = ""
     receipt_number: str = "№ 1-127-176-643-532"
     support_label: str = "Служба поддержки"
     support_email: str = "fb@tbank.ru"
     note_text: str = "По вопросам зачисления обращайтесь к получателю"
 
 PAGE_WIDTH = 270.0
-PAGE_HEIGHT = 460.0          # уменьшено с 519.0 (убрали 59 пунктов)
+PAGE_HEIGHT = 460.0
 MARGIN_X = 20.0
 RIGHT_X = 250.0
 
@@ -179,7 +184,6 @@ COLOR_STAMP = HexColor("#126cba")
 COLOR_DISCLAIMER = HexColor("#a04040")
 COLOR_WATERMARK = Color(0.85, 0.2, 0.2, alpha=0.09)
 
-# Координаты (подогнаны под шрифт TinkoffSans)
 DATE_Y = 432.5
 TOTAL_Y = 412.4
 TOTAL_RIGHT_X = 249.0
@@ -193,13 +197,10 @@ Y_RECIPIENT_CARD = 275.78
 Y_RECIPIENT_NAME = 255.78
 Y_RECIPIENT_BANK = 235.78
 
-# Нижние элементы (сдвинуты вверх из-за уменьшенной высоты страницы)
 Y_RECEIPT_NUMBER = 90.0
 Y_NOTE = 73.0
 Y_SUPPORT = 56.0
-
-# Жёлтая полоска перед квитанцией
-Y_BOTTOM_LINE = Y_RECEIPT_NUMBER - 10   # 80.0
+Y_BOTTOM_LINE = Y_RECEIPT_NUMBER - 10
 
 LABEL_SIZE = 9.0
 VALUE_SIZE = 9.0
@@ -354,11 +355,9 @@ def render_receipt_17_card_pdf(data: Receipt17CardData) -> bytes:
     _draw_watermark(c)
     _draw_demo_icon(c)
 
-    # Дата
     c.setFillColor(COLOR_MUTED)
     _draw_text(c, MARGIN_X, DATE_Y, data.datetime_text.strip() or "—", FONT_REGULAR, 8.0)
 
-    # Итого
     c.setFillColor(COLOR_TEXT)
     _draw_text(c, 19.0, TOTAL_Y, "Итого", FONT_BOLD, TOTAL_SIZE)
     amount = data.total.strip().removesuffix("₽").rstrip()
@@ -372,7 +371,6 @@ def render_receipt_17_card_pdf(data: Receipt17CardData) -> bytes:
     _draw_bold_ruble(c, start_x + amount_width, TOTAL_Y, ruble, FONT_RUBLE_BOLD, TOTAL_SIZE)
     _draw_accent_line(c, 397.5)
 
-    # 8 строк
     c.setFillColor(COLOR_TEXT)
 
     _draw_text(c, MARGIN_X, Y_TRANSFER, "Перевод", FONT_REGULAR, LABEL_SIZE)
@@ -390,7 +388,6 @@ def render_receipt_17_card_pdf(data: Receipt17CardData) -> bytes:
     _draw_text(c, MARGIN_X, Y_SENDER, "Отправитель", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_SENDER, data.sender_name)
 
-    # Белый фон
     c.saveState()
     c.setFillColor(HexColor("#ffffff"))
     c.rect(20.0, 176.0, 230.0, 108.0, stroke=0, fill=1)
@@ -404,10 +401,8 @@ def render_receipt_17_card_pdf(data: Receipt17CardData) -> bytes:
     _draw_text(c, MARGIN_X, Y_RECIPIENT_BANK, "Банк получателя", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_RECIPIENT_BANK, data.recipient_bank)
 
-    # Нижняя жёлтая полоска (добавлена)
     _draw_accent_line(c, Y_BOTTOM_LINE)
 
-    # Нижние элементы
     c.setFillColor(COLOR_TEXT)
     _draw_text(c, MARGIN_X, Y_RECEIPT_NUMBER, f"Квитанция  {data.receipt_number}", FONT_REGULAR, VALUE_SIZE)
     c.setFillColor(COLOR_MUTED)
