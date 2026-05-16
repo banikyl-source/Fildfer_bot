@@ -161,7 +161,7 @@ class Receipt17CardData:
     recipient_card: str = "220220******7357"
     recipient_name: str = "Ильяс А."
     recipient_bank: str = "Сбербанк"
-    # Поля для совместимости с FSM (в PDF не выводятся)
+    # поля для совместимости с FSM (не выводятся)
     debit_account: str = ""
     operation_id_line_1: str = ""
     operation_id_line_2: str = ""
@@ -172,7 +172,7 @@ class Receipt17CardData:
     note_text: str = "По вопросам зачисления обращайтесь к получателю"
 
 PAGE_WIDTH = 270.0
-PAGE_HEIGHT = 460.0
+PAGE_HEIGHT = 471.0          # точная высота оригинала
 MARGIN_X = 20.0
 RIGHT_X = 250.0
 
@@ -184,6 +184,7 @@ COLOR_STAMP = HexColor("#126cba")
 COLOR_DISCLAIMER = HexColor("#a04040")
 COLOR_WATERMARK = Color(0.85, 0.2, 0.2, alpha=0.09)
 
+# Координаты (уже подогнаны под TinkoffSans и работают)
 DATE_Y = 432.5
 TOTAL_Y = 412.4
 TOTAL_RIGHT_X = 249.0
@@ -200,7 +201,7 @@ Y_RECIPIENT_BANK = 235.78
 Y_RECEIPT_NUMBER = 90.0
 Y_NOTE = 73.0
 Y_SUPPORT = 56.0
-Y_BOTTOM_LINE = Y_RECEIPT_NUMBER - 10
+Y_BOTTOM_LINE = Y_RECEIPT_NUMBER - 10   # 80.0
 
 LABEL_SIZE = 9.0
 VALUE_SIZE = 9.0
@@ -353,7 +354,7 @@ def render_receipt_17_card_pdf(data: Receipt17CardData) -> bytes:
     c.setSubject("Демонстрационная квитанция, не имеет юридической силы")
 
     _draw_watermark(c)
-    _draw_demo_icon(c)
+    _draw_demo_icon(c)      # логотип
 
     c.setFillColor(COLOR_MUTED)
     _draw_text(c, MARGIN_X, DATE_Y, data.datetime_text.strip() or "—", FONT_REGULAR, 8.0)
