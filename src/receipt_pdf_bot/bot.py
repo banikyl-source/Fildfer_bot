@@ -25,6 +25,10 @@ from receipt_pdf_bot.receipt_17_03_2026_template import (
     Receipt17Data,
     render_receipt_17_pdf,
 )
+from receipt_pdf_bot.receipt_17_card_template import (
+    Receipt17CardData,
+    render_receipt_17_card_pdf,
+)
 from receipt_pdf_bot.receipt_alfa_template import (
     AlfaReceiptData,
     render_alfa_receipt_pdf,
@@ -65,7 +69,8 @@ class AdminActions(StatesGroup):
     waiting_for_delete_key = State()
 
 TEMPLATE_CLASSIC = "classic"
-TEMPLATE_17 = "receipt_17"
+TEMPLATE_17_PHONE = "tbank_phone"
+TEMPLATE_17_CARD = "tbank_card"
 TEMPLATE_ALFA = "alfa"
 
 # ---------- ПОЛЯ И ПОРЯДОК ШАГОВ ----------
@@ -86,7 +91,7 @@ _FIELD_BY_STATE = {
     FillReceipt.transfer_message.state: "transfer_message",
 }
 
-# --- СберБанк (классический) ---
+# Для СберБанка (классический)
 _FIELD_ORDER_CLASSIC = (
     FillReceipt.datetime_text,
     FillReceipt.operation,
@@ -101,14 +106,14 @@ _FIELD_ORDER_CLASSIC = (
     FillReceipt.receipt_number,
 )
 
-# --- Т-банк ---
-_FIELD_ORDER_FULL = (
+# Для Т-банк (по телефону) и Т-банк (по карте) – одинаковый порядок полей
+_FIELD_ORDER_TBANK = (
     FillReceipt.datetime_text,
     FillReceipt.operation,
     FillReceipt.amount,
     FillReceipt.fee,
     FillReceipt.sender_name,
-    FillReceipt.recipient_card,
+    FillReceipt.recipient_card,      # телефон или карта
     FillReceipt.recipient_name,
     FillReceipt.recipient_bank,
     FillReceipt.sender_account,
@@ -117,21 +122,21 @@ _FIELD_ORDER_FULL = (
     FillReceipt.receipt_number,
 )
 
-# --- Альфа-Банк ---
+# Для Альфа-Банка
 _FIELD_ORDER_ALFA = (
     FillReceipt.datetime_text,
     FillReceipt.amount,
     FillReceipt.fee,
-    FillReceipt.recipient_card,          # номер телефона получателя
+    FillReceipt.recipient_card,
     FillReceipt.recipient_bank,
     FillReceipt.sender_account,
-    FillReceipt.document_number,         # номер операции
-    FillReceipt.auth_code,               # идентификатор СБП
+    FillReceipt.document_number,
+    FillReceipt.auth_code,
     FillReceipt.recipient_name,
     FillReceipt.transfer_message,
 )
 
-# Подсказки для Альфа-Банка
+# Подсказки для разных шаблонов
 _ALFA_PROMPTS = {
     FillReceipt.datetime_text.state: "📅 Введите дату и время перевода (пример: 19.11.2025 20:21:45 мск):",
     FillReceipt.amount.state: "💰 Введите сумму перевода (пример: 26 200 RUR):",
@@ -145,13 +150,12 @@ _ALFA_PROMPTS = {
     FillReceipt.transfer_message.state: "✉️ Введите сообщение получателю (пример: Перевод денежных средств):",
 }
 
-# Общие подсказки (СберБанк и Т-банк)
 _NEXT_PROMPT = {
     FillReceipt.datetime_text.state: "<b>Шаг 1/11.</b> Введите дату и время операции.\nПример: <code>5 апреля 2026 20:29:42 (МСК)</code>",
     FillReceipt.operation.state: "<b>Шаг 2/11.</b> Название операции.\nПример: <code>Перевод клиенту</code>",
     FillReceipt.recipient_name.state: "<b>Шаг 3/11.</b> ФИО получателя.\nПример: <code>Даниил Андреевич З.</code>",
     FillReceipt.recipient_card.state: "<b>Шаг 4/11.</b> Карта или телефон получателя.\nПример: <code>**** 0264</code>",
-    FillReceipt.recipient_bank.state: "<b>Шаг 5/11.</b> Банк получателя (только для шаблона Т-банк).\nПример: <code>Яндекс</code>",
+    FillReceipt.recipient_bank.state: "<b>Шаг 5/11.</b> Банк получателя.\nПример: <code>Яндекс</code>",
     FillReceipt.sender_name.state: "<b>Шаг 5/11.</b> ФИО отправителя.\nПример: <code>Артём Анатольевич М.</code>",
     FillReceipt.sender_account.state: "<b>Шаг 6/11.</b> Счёт отправителя.\nПример: <code>**** 0220</code>",
     FillReceipt.amount.state: "<b>Шаг 7/11.</b> Сумма перевода.\nПример: <code>259,00 ₽</code>",
@@ -179,13 +183,14 @@ _TEMPLATE_17_FIELD_HINTS = {
 
 _TEMPLATE_NAMES = {
     TEMPLATE_CLASSIC: "СберБанк",
-    TEMPLATE_17: "Т-банк",
+    TEMPLATE_17_PHONE: "Т-банк (по телефону)",
+    TEMPLATE_17_CARD: "Т-банк (по карте)",
     TEMPLATE_ALFA: "Альфа Банк",
 }
 
 _RECEIPT_DATA_FIELDS = set(ReceiptData.__dataclass_fields__)
 
-# ---------- СИСТЕМА КЛЮЧЕЙ ----------
+# ---------- СИСТЕМА КЛЮЧЕЙ (функции) ----------
 def load_keys() -> Set[str]:
     if not os.path.exists(KEYS_FILE):
         with open(KEYS_FILE, "w") as f:
@@ -273,6 +278,13 @@ def get_banks_keyboard() -> ReplyKeyboardMarkup:
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
+def get_tbank_variants_keyboard() -> ReplyKeyboardMarkup:
+    buttons = [
+        [KeyboardButton(text="📞 По номеру телефона"), KeyboardButton(text="💳 По номеру карты")],
+        [KeyboardButton(text="◀️ Назад в меню")]
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
 def get_admin_keyboard() -> ReplyKeyboardMarkup:
     buttons = [
         [KeyboardButton(text="🔄 Сбросить всех пользователей")],
@@ -294,8 +306,8 @@ def _normalize_value(text: str) -> str:
     return "" if text in {"-", "—", "_"} else text
 
 def _field_order_for_template(template_id: str):
-    if template_id == TEMPLATE_17:
-        return _FIELD_ORDER_FULL
+    if template_id == TEMPLATE_17_PHONE or template_id == TEMPLATE_17_CARD:
+        return _FIELD_ORDER_TBANK
     if template_id == TEMPLATE_ALFA:
         return _FIELD_ORDER_ALFA
     return _FIELD_ORDER_CLASSIC
@@ -310,7 +322,10 @@ def _next_state_for_template(current_state: str, template_id: str) -> Optional[S
 def _prompt_for_state(state: State, template_id: str) -> str:
     if template_id == TEMPLATE_ALFA:
         return _ALFA_PROMPTS.get(state.state, "Введите значение:")
-    if template_id == TEMPLATE_17:
+    if template_id == TEMPLATE_17_PHONE:
+        if state.state == FillReceipt.recipient_card.state:
+            return "📞 Введите номер телефона получателя (10 цифр без +):"
+        # остальные подсказки из _TEMPLATE_17_FIELD_HINTS
         field_name = _FIELD_BY_STATE[state.state]
         label, default = _TEMPLATE_17_FIELD_HINTS[field_name]
         states = _field_order_for_template(template_id)
@@ -320,23 +335,71 @@ def _prompt_for_state(state: State, template_id: str) -> str:
             f"По умолчанию: <code>{default}</code>\n"
             "Отправьте новое значение или <code>-</code>, чтобы оставить как в образце."
         )
-    else:
-        return _NEXT_PROMPT.get(state.state, "Введите значение:")
+    if template_id == TEMPLATE_17_CARD:
+        if state.state == FillReceipt.recipient_card.state:
+            return "💳 Введите номер карты получателя (16 цифр):"
+        if state.state == FillReceipt.recipient_bank.state:
+            return "🏦 Введите банк получателя (пример: Сбербанк):"
+        if state.state == FillReceipt.operation.state:
+            return "✏️ Введите тип перевода (по умолчанию «По номеру карты»):"
+        # общие подсказки, но с изменёнными значениями по умолчанию
+        field_name = _FIELD_BY_STATE[state.state]
+        # зададим свои дефолты для карточного чека
+        card_defaults = Receipt17CardData()
+        default_map = {
+            "datetime_text": card_defaults.datetime_text,
+            "operation": card_defaults.transfer_type,
+            "amount": card_defaults.amount,
+            "fee": card_defaults.fee,
+            "sender_name": card_defaults.sender_name,
+            "recipient_name": card_defaults.recipient_name,
+            "recipient_bank": card_defaults.recipient_bank,
+            "sender_account": card_defaults.debit_account,
+            "document_number": card_defaults.operation_id_line_1,
+            "auth_code": card_defaults.operation_id_line_2,
+            "receipt_number": card_defaults.receipt_number,
+        }
+        default = default_map.get(field_name, "—")
+        states = _field_order_for_template(template_id)
+        step = next(i for i, s in enumerate(states, 1) if s.state == state.state)
+        label_map = {
+            "datetime_text": "Дата и время",
+            "operation": "Тип перевода",
+            "amount": "Сумма",
+            "fee": "Комиссия",
+            "sender_name": "Отправитель",
+            "recipient_name": "Получатель",
+            "recipient_bank": "Банк получателя",
+            "sender_account": "Счёт списания",
+            "document_number": "Идентификатор операции (первая строка)",
+            "auth_code": "Код авторизации (вторая строка)",
+            "receipt_number": "Номер квитанции",
+        }
+        label = label_map.get(field_name, field_name)
+        return (
+            f"<b>Шаг {step}/{len(states)}.</b> {label}.\n"
+            f"По умолчанию: <code>{default}</code>\n"
+            "Отправьте новое значение или <code>-</code>, чтобы оставить как в образце."
+        )
+    # СберБанк
+    return _NEXT_PROMPT.get(state.state, "Введите значение:")
 
 def _resolve_template_id(raw: Optional[str]) -> str:
     if not raw:
         return TEMPLATE_CLASSIC
-    if "Т-банк" in raw:
-        return TEMPLATE_17
-    if "СберБанк" in raw:
-        return TEMPLATE_CLASSIC
+    if raw == "Т-банк (по телефону)" or raw == "📞 По номеру телефона":
+        return TEMPLATE_17_PHONE
+    if raw == "Т-банк (по карте)" or raw == "💳 По номеру карты":
+        return TEMPLATE_17_CARD
     if "Альфа" in raw:
         return TEMPLATE_ALFA
+    if "Сбер" in raw:
+        return TEMPLATE_CLASSIC
     return TEMPLATE_CLASSIC
 
 def _render_template_pdf(values: Dict[str, Any], template_id: str) -> tuple[bytes, str]:
     current_date = datetime.now().strftime("%d.%m.%Y")
-    if template_id == TEMPLATE_17:
+    if template_id == TEMPLATE_17_PHONE:
         defaults = Receipt17Data()
         amount = values.get("amount") or defaults.amount
         doc_num = values.get("document_number") or defaults.operation_id_line_1
@@ -358,6 +421,29 @@ def _render_template_pdf(values: Dict[str, Any], template_id: str) -> tuple[byte
             receipt_number=receipt_num,
         )
         return render_receipt_17_pdf(receipt), f"receipt_{current_date}.pdf"
+    elif template_id == TEMPLATE_17_CARD:
+        defaults = Receipt17CardData()
+        amount = values.get("amount") or defaults.amount
+        doc_num = values.get("document_number") or defaults.operation_id_line_1
+        auth = values.get("auth_code") or defaults.operation_id_line_2
+        receipt_num = values.get("receipt_number") or defaults.receipt_number
+        receipt = Receipt17CardData(
+            datetime_text=values.get("datetime_text") or defaults.datetime_text,
+            total=amount,
+            transfer_type=values.get("operation") or defaults.transfer_type,
+            status=values.get("status") or defaults.status,
+            amount=amount,
+            fee=values.get("fee") or defaults.fee,
+            sender_name=values.get("sender_name") or defaults.sender_name,
+            recipient_card=values.get("recipient_card") or defaults.recipient_card,
+            recipient_name=values.get("recipient_name") or defaults.recipient_name,
+            recipient_bank=values.get("recipient_bank") or defaults.recipient_bank,
+            debit_account=values.get("sender_account") or defaults.debit_account,
+            operation_id_line_1=doc_num,
+            operation_id_line_2=auth,
+            receipt_number=receipt_num,
+        )
+        return render_receipt_17_card_pdf(receipt), f"receipt_card_{current_date}.pdf"
     elif template_id == TEMPLATE_ALFA:
         alfa_data = AlfaReceiptData(
             datetime_text=values.get("datetime_text") or "19.11.2025 20:21:45 мск",
@@ -438,6 +524,29 @@ async def handle_text(message: Message, state: FSMContext):
         await message.answer("·", reply_markup=get_banks_keyboard())
         return
 
+    if text == "Т-банк":
+        await state.clear()
+        await message.answer("Выберите тип перевода:", reply_markup=get_tbank_variants_keyboard())
+        return
+
+    if text in ("📞 По номеру телефона", "💳 По номеру карты"):
+        if "телефона" in text:
+            template_id = TEMPLATE_17_PHONE
+            template_name = "Т-банк (по телефону)"
+        else:
+            template_id = TEMPLATE_17_CARD
+            template_name = "Т-банк (по карте)"
+        await state.clear()
+        await state.update_data(template_id=template_id, values={})
+        first_state = _field_order_for_template(template_id)[0]
+        await state.set_state(first_state)
+        await message.answer(
+            f"Выбран: <b>{template_name}</b>\n\n{_prompt_for_state(first_state, template_id)}",
+            parse_mode="HTML",
+            reply_markup=get_cancel_keyboard()
+        )
+        return
+
     if text == "⚙️ Админ панель" and user_id == ADMIN_ID:
         await state.clear()
         await message.answer("·", reply_markup=get_admin_keyboard())
@@ -449,13 +558,11 @@ async def handle_text(message: Message, state: FSMContext):
         await message.answer("·", reply_markup=get_main_keyboard(is_admin))
         return
 
-    if text in ("Т-банк", "СберБанк", "Альфа Банк"):
-        if "Т-банк" in text:
-            template_id = TEMPLATE_17
-        elif "Альфа" in text:
-            template_id = TEMPLATE_ALFA
-        else:
+    if text in ("СберБанк", "Альфа Банк"):
+        if "Сбер" in text:
             template_id = TEMPLATE_CLASSIC
+        else:
+            template_id = TEMPLATE_ALFA
         await state.clear()
         await state.update_data(template_id=template_id, values={})
         first_state = _field_order_for_template(template_id)[0]
@@ -521,7 +628,7 @@ async def handle_text(message: Message, state: FSMContext):
             pdf_bytes, filename = _render_template_pdf(values, template_id)
             await message.answer_document(
                 BufferedInputFile(pdf_bytes, filename=filename),
-                caption=f"✅ Готово: <b>{_TEMPLATE_NAMES[template_id]}</b>"
+                caption=f"✅ Готово: <b>{_TEMPLATE_NAMES.get(template_id, 'Чек')}</b>"
             )
             await state.clear()
             is_admin = (user_id == ADMIN_ID)
