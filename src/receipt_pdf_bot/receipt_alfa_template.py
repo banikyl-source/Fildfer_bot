@@ -1,4 +1,4 @@
-"""Template for Alfa-Bank SBP receipt with Tahoma (regular only)."""
+"""Template for Alfa-Bank SBP receipt – exact coordinates for all elements."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ from pathlib import Path
 from datetime import datetime
 
 from reportlab.lib.colors import HexColor
-from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
@@ -17,35 +16,20 @@ ASSET_DIR = Path(__file__).parent / "assets"
 FONT_DIR = ASSET_DIR / "fonts"
 ALFA_ASSET_DIR = ASSET_DIR / "alfa"
 
-FONT_REGULAR = "AlfaRegular"
-FONT_FALLBACK = "AlfaFallback"
-
-# Используем только обычный Tahoma для всего текста
-_FONT_CANDIDATES = [
-    (FONT_REGULAR, [
-        FONT_DIR / "Tahoma.ttf",
-        FONT_DIR / "DejaVuSans.ttf",
-        FONT_DIR / "TinkoffSans-Regular.ttf"
-    ]),
-    (FONT_FALLBACK, [
-        FONT_DIR / "Tahoma.ttf",
-        FONT_DIR / "DejaVuSans.ttf"
-    ]),
-]
-
+FONT_NAME = "AlfaTahoma"
 _fonts_registered = False
 
 def _ensure_fonts():
     global _fonts_registered
     if _fonts_registered:
         return
-    for name, paths in _FONT_CANDIDATES:
-        for p in paths:
-            if p and p.exists():
-                pdfmetrics.registerFont(TTFont(name, str(p)))
-                break
-        else:
-            raise RuntimeError(f"Font {name} not found")
+    font_path = FONT_DIR / "Tahoma.ttf"
+    if not font_path.exists():
+        font_path = FONT_DIR / "DejaVuSans.ttf"
+    if font_path.exists():
+        pdfmetrics.registerFont(TTFont(FONT_NAME, str(font_path)))
+    else:
+        raise RuntimeError("No font found for Alfa receipt")
     _fonts_registered = True
 
 @dataclass
@@ -63,18 +47,36 @@ class AlfaReceiptData:
 
 PAGE_WIDTH = 600.0
 PAGE_HEIGHT = 840.0
+
+# Координаты из оригинального PDF (Y от нижнего края)
 LEFT_X = 35.45
 RIGHT_X = 304.75
 
-LOGO_X = 262.85
-LOGO_Y = PAGE_HEIGHT - 771.45
+# === Изображения ===
+# logo.png (левый верхний угол, top=35.45)
+LOGO_X = 35.45
+LOGO_Y = PAGE_HEIGHT - 35.45
 LOGO_WIDTH = 35.0
 LOGO_HEIGHT = 35.0
 
-HEADER_LABEL_Y = 806.44
-HEADER_DATE_Y = 790.15
-TITLE_Y = 736.78
+# stamp.png (левый штамп, top=386.323)
+STAMP1_X = 35.45
+STAMP1_Y = PAGE_HEIGHT - 386.323
+STAMP1_WIDTH = 250.0
+STAMP1_HEIGHT = 80.0
 
+# stamp2.png (правый штамп, top=771.45)
+STAMP2_X = 262.85
+STAMP2_Y = PAGE_HEIGHT - 771.45
+STAMP2_WIDTH = 250.0
+STAMP2_HEIGHT = 70.0
+
+# Верхний текст
+HEADER_LABEL_Y = 806.44   # "Сформирована"
+HEADER_DATE_Y = 790.15    # дата
+TITLE_Y = 736.78          # заголовок
+
+# Левые названия (серые) и значения (чёрные)
 LEFT_LABELS = [
     ("Сумма перевода", 693.70),
     ("Комиссия", 650.80),
@@ -90,6 +92,7 @@ LEFT_VALUES = [
     ("recipient_name", 504.71),
 ]
 
+# Правые названия (серые) и значения (чёрные)
 RIGHT_LABELS = [
     ("Номер телефона получателя", 693.70),
     ("Банк получателя", 650.80),
@@ -105,17 +108,14 @@ RIGHT_VALUES = [
     ("transfer_message", 504.71),
 ]
 
-LAST_Y = 504.71
-STAMP1_Y = LAST_Y - 50
-STAMP2_Y = STAMP1_Y - 90
-
+# Цвета
 COLOR_GRAY = HexColor("#7e7e83")
 COLOR_LIGHT_GRAY = HexColor("#808080")
 COLOR_BLACK = HexColor("#000000")
 
-def _draw_text(c, x, y, text, font, size, color):
+def _draw_text(c, x, y, text, size, color):
     c.setFillColor(color)
-    c.setFont(font, size)
+    c.setFont(FONT_NAME, size)
     c.drawString(x, y, text)
 
 def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
@@ -125,49 +125,33 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
     current_date = datetime.now().strftime("%d.%m.%Y %H:%M мск")
     c.setTitle(f"alfa_receipt_{datetime.now().strftime('%d.%m.%Y')}.pdf")
 
+    # Изображения (если файлы существуют)
     logo_path = ALFA_ASSET_DIR / "logo.png"
     if logo_path.exists():
         c.drawImage(str(logo_path), LOGO_X, LOGO_Y, width=LOGO_WIDTH, height=LOGO_HEIGHT, preserveAspectRatio=True, mask='auto')
 
-    _draw_text(c, LEFT_X, HEADER_LABEL_Y, "Сформирована", FONT_REGULAR, 11, COLOR_GRAY)
-    _draw_text(c, LEFT_X, HEADER_DATE_Y, current_date, FONT_REGULAR, 11, COLOR_GRAY)
-    _draw_text(c, LEFT_X, TITLE_Y, "Квитанция о переводе по СБП", FONT_REGULAR, 21, COLOR_BLACK)  # используем обычный шрифт
+    stamp1_path = ALFA_ASSET_DIR / "stamp.png"
+    if stamp1_path.exists():
+        c.drawImage(str(stamp1_path), STAMP1_X, STAMP1_Y, width=STAMP1_WIDTH, height=STAMP1_HEIGHT, preserveAspectRatio=True, mask='auto')
+
+    stamp2_path = ALFA_ASSET_DIR / "stamp2.png"
+    if stamp2_path.exists():
+        c.drawImage(str(stamp2_path), STAMP2_X, STAMP2_Y, width=STAMP2_WIDTH, height=STAMP2_HEIGHT, preserveAspectRatio=True, mask='auto')
+
+    # Тексты
+    _draw_text(c, LEFT_X, HEADER_LABEL_Y, "Сформирована", 11, COLOR_GRAY)
+    _draw_text(c, LEFT_X, HEADER_DATE_Y, current_date, 11, COLOR_GRAY)
+    _draw_text(c, LEFT_X, TITLE_Y, "Квитанция о переводе по СБП", 21, COLOR_BLACK)
 
     for label, y in LEFT_LABELS:
-        _draw_text(c, LEFT_X, y, label, FONT_REGULAR, 11, COLOR_LIGHT_GRAY)
+        _draw_text(c, LEFT_X, y, label, 11, COLOR_LIGHT_GRAY)
     for field, y in LEFT_VALUES:
-        value = getattr(data, field)
-        _draw_text(c, LEFT_X, y, value, FONT_REGULAR, 12, COLOR_BLACK)
+        _draw_text(c, LEFT_X, y, getattr(data, field), 12, COLOR_BLACK)
 
     for label, y in RIGHT_LABELS:
-        _draw_text(c, RIGHT_X, y, label, FONT_REGULAR, 11, COLOR_LIGHT_GRAY)
+        _draw_text(c, RIGHT_X, y, label, 11, COLOR_LIGHT_GRAY)
     for field, y in RIGHT_VALUES:
-        value = getattr(data, field)
-        _draw_text(c, RIGHT_X, y, value, FONT_REGULAR, 12, COLOR_BLACK)
-
-    # Штампы
-    stamp1_path = ALFA_ASSET_DIR / "stamp.png"
-    stamp2_path = ALFA_ASSET_DIR / "stamp2.png"
-
-    if stamp1_path.exists():
-        c.drawImage(str(stamp1_path), LEFT_X, STAMP1_Y - 40, width=250, height=80, preserveAspectRatio=True, mask='auto')
-    else:
-        y = STAMP1_Y
-        lines1 = ["АО «АЛЬФА-БАНК»", "БИК 044525593 ИНН 7728168971", "к/сч 30101810200000000593", "", "ПЕРЕВОД ВЫПОЛНЕН"]
-        for line in lines1:
-            if line:
-                _draw_text(c, LEFT_X, y, line, FONT_REGULAR, 8, COLOR_BLACK)
-            y -= 12
-
-    if stamp2_path.exists():
-        c.drawImage(str(stamp2_path), LEFT_X, STAMP2_Y - 30, width=250, height=70, preserveAspectRatio=True, mask='auto')
-    else:
-        y = STAMP2_Y
-        lines2 = ["alfabank.ru", "АО «АЛЬФА-БАНК»", "ул. Каланчёвская, 27, Москва, 107078", "+7 495 620 91 91", "mail@alfabank.ru"]
-        for line in lines2:
-            if line:
-                _draw_text(c, LEFT_X, y, line, FONT_REGULAR, 8, COLOR_BLACK)
-            y -= 12
+        _draw_text(c, RIGHT_X, y, getattr(data, field), 12, COLOR_BLACK)
 
     c.showPage()
     c.save()
