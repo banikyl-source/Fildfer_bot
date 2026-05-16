@@ -161,18 +161,13 @@ class Receipt17CardData:
     recipient_card: str = "220220******7357"
     recipient_name: str = "Ильяс А."
     recipient_bank: str = "Сбербанк"
-    # Остальные поля оставляем для совместимости с FSM, но в PDF они не выводятся
-    debit_account: str = ""
-    operation_id_line_1: str = ""
-    operation_id_line_2: str = ""
-    operation_type: str = ""
     receipt_number: str = "№ 1-127-176-643-532"
     support_label: str = "Служба поддержки"
     support_email: str = "fb@tbank.ru"
     note_text: str = "По вопросам зачисления обращайтесь к получателю"
 
 PAGE_WIDTH = 270.0
-PAGE_HEIGHT = 519.0
+PAGE_HEIGHT = 460.0          # уменьшено с 519.0 (убрали 59 пунктов)
 MARGIN_X = 20.0
 RIGHT_X = 250.0
 
@@ -189,20 +184,22 @@ DATE_Y = 432.5
 TOTAL_Y = 412.4
 TOTAL_RIGHT_X = 249.0
 
-# Y для строк (те же, что в шаблоне для телефона, но некоторые не используются)
 Y_TRANSFER = 376.78
 Y_STATUS = 356.78
 Y_AMOUNT = 336.78
 Y_FEE = 315.78
 Y_SENDER = 295.78
-Y_RECIPIENT_CARD = 275.78   # вместо телефона
+Y_RECIPIENT_CARD = 275.78
 Y_RECIPIENT_NAME = 255.78
 Y_RECIPIENT_BANK = 235.78
-# Y_DEBIT_ACCOUNT, Y_IDENT_FIRST, Y_IDENT_SECOND – удалены
 
-Y_RECEIPT_NUMBER = 58.82
-Y_NOTE = 41.82
-Y_SUPPORT = 24.82
+# Нижние элементы (сдвинуты вверх из-за уменьшенной высоты страницы)
+Y_RECEIPT_NUMBER = 90.0
+Y_NOTE = 73.0
+Y_SUPPORT = 56.0
+
+# Жёлтая полоска перед квитанцией
+Y_BOTTOM_LINE = Y_RECEIPT_NUMBER - 10   # 80.0
 
 LABEL_SIZE = 9.0
 VALUE_SIZE = 9.0
@@ -375,30 +372,25 @@ def render_receipt_17_card_pdf(data: Receipt17CardData) -> bytes:
     _draw_bold_ruble(c, start_x + amount_width, TOTAL_Y, ruble, FONT_RUBLE_BOLD, TOTAL_SIZE)
     _draw_accent_line(c, 397.5)
 
-    # Ручная отрисовка 8 строк
+    # 8 строк
     c.setFillColor(COLOR_TEXT)
 
-    # 1. Перевод
     _draw_text(c, MARGIN_X, Y_TRANSFER, "Перевод", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_TRANSFER, data.transfer_type)
 
-    # 2. Статус
     _draw_text(c, MARGIN_X, Y_STATUS, "Статус", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_STATUS, data.status)
 
-    # 3. Сумма
     _draw_text(c, MARGIN_X, Y_AMOUNT, "Сумма", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_AMOUNT, data.amount)
 
-    # 4. Комиссия
     _draw_text(c, MARGIN_X, Y_FEE, "Комиссия", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_FEE, data.fee)
 
-    # 5. Отправитель
     _draw_text(c, MARGIN_X, Y_SENDER, "Отправитель", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_SENDER, data.sender_name)
 
-    # 6. Карта получателя (вместо телефона)
+    # Белый фон
     c.saveState()
     c.setFillColor(HexColor("#ffffff"))
     c.rect(20.0, 176.0, 230.0, 108.0, stroke=0, fill=1)
@@ -406,15 +398,16 @@ def render_receipt_17_card_pdf(data: Receipt17CardData) -> bytes:
     _draw_text(c, MARGIN_X, Y_RECIPIENT_CARD, "Карта получателя", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_RECIPIENT_CARD, data.recipient_card)
 
-    # 7. Получатель
     _draw_text(c, MARGIN_X, Y_RECIPIENT_NAME, "Получатель", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_RECIPIENT_NAME, data.recipient_name)
 
-    # 8. Банк получателя
     _draw_text(c, MARGIN_X, Y_RECIPIENT_BANK, "Банк получателя", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_RECIPIENT_BANK, data.recipient_bank)
 
-    # Нижние элементы (квитанция, примечания, поддержка)
+    # Нижняя жёлтая полоска (добавлена)
+    _draw_accent_line(c, Y_BOTTOM_LINE)
+
+    # Нижние элементы
     c.setFillColor(COLOR_TEXT)
     _draw_text(c, MARGIN_X, Y_RECEIPT_NUMBER, f"Квитанция  {data.receipt_number}", FONT_REGULAR, VALUE_SIZE)
     c.setFillColor(COLOR_MUTED)
