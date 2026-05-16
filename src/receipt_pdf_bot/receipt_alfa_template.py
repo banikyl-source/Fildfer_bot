@@ -1,4 +1,4 @@
-"""Template for Alfa-Bank SBP receipt with exact styles and coordinates."""
+"""Template for Alfa-Bank SBP receipt with Tahoma (regular only)."""
 
 from __future__ import annotations
 
@@ -17,15 +17,20 @@ ASSET_DIR = Path(__file__).parent / "assets"
 FONT_DIR = ASSET_DIR / "fonts"
 ALFA_ASSET_DIR = ASSET_DIR / "alfa"
 
-# Шрифты
 FONT_REGULAR = "AlfaRegular"
-FONT_BOLD = "AlfaBold"
 FONT_FALLBACK = "AlfaFallback"
 
+# Используем только обычный Tahoma для всего текста
 _FONT_CANDIDATES = [
-    (FONT_REGULAR, [FONT_DIR / "Tahoma.ttf", FONT_DIR / "DejaVuSans.ttf", FONT_DIR / "TinkoffSans-Regular.ttf"]),
-    (FONT_BOLD,   [FONT_DIR / "Tahoma-Bold.ttf", FONT_DIR / "DejaVuSans-Bold.ttf", FONT_DIR / "TinkoffSans-Medium.ttf"]),
-    (FONT_FALLBACK, [FONT_DIR / "DejaVuSans.ttf", FONT_DIR / "TinkoffSans-Regular.ttf"]),
+    (FONT_REGULAR, [
+        FONT_DIR / "Tahoma.ttf",
+        FONT_DIR / "DejaVuSans.ttf",
+        FONT_DIR / "TinkoffSans-Regular.ttf"
+    ]),
+    (FONT_FALLBACK, [
+        FONT_DIR / "Tahoma.ttf",
+        FONT_DIR / "DejaVuSans.ttf"
+    ]),
 ]
 
 _fonts_registered = False
@@ -56,26 +61,20 @@ class AlfaReceiptData:
     recipient_name: str = "Роман Павлович Б"
     transfer_message: str = "Перевод денежных средств"
 
-# Размер страницы
 PAGE_WIDTH = 600.0
 PAGE_HEIGHT = 840.0
-
-# Координаты из оригинала (выверены)
 LEFT_X = 35.45
 RIGHT_X = 304.75
 
-# Логотип (опционально)
 LOGO_X = 262.85
 LOGO_Y = PAGE_HEIGHT - 771.45
 LOGO_WIDTH = 35.0
 LOGO_HEIGHT = 35.0
 
-# Верхняя часть
-HEADER_LABEL_Y = 806.44      # "Сформирована"
-HEADER_DATE_Y = 790.15       # дата
+HEADER_LABEL_Y = 806.44
+HEADER_DATE_Y = 790.15
 TITLE_Y = 736.78
 
-# Левые названия и их Y
 LEFT_LABELS = [
     ("Сумма перевода", 693.70),
     ("Комиссия", 650.80),
@@ -83,7 +82,6 @@ LEFT_LABELS = [
     ("Номер операции", 565.02),
     ("Получатель", 522.12),
 ]
-# Левые значения и их Y
 LEFT_VALUES = [
     ("amount", 676.29),
     ("fee", 633.39),
@@ -92,7 +90,6 @@ LEFT_VALUES = [
     ("recipient_name", 504.71),
 ]
 
-# Правые названия и их Y
 RIGHT_LABELS = [
     ("Номер телефона получателя", 693.70),
     ("Банк получателя", 650.80),
@@ -100,7 +97,6 @@ RIGHT_LABELS = [
     ("Идентификатор операции в СБП", 565.02),
     ("Сообщение получателю", 522.12),
 ]
-# Правые значения и их Y
 RIGHT_VALUES = [
     ("recipient_phone", 676.29),
     ("recipient_bank", 633.39),
@@ -109,12 +105,10 @@ RIGHT_VALUES = [
     ("transfer_message", 504.71),
 ]
 
-# Штампы (Y от нижнего края)
 LAST_Y = 504.71
 STAMP1_Y = LAST_Y - 50
 STAMP2_Y = STAMP1_Y - 90
 
-# Цвета
 COLOR_GRAY = HexColor("#7e7e83")
 COLOR_LIGHT_GRAY = HexColor("#808080")
 COLOR_BLACK = HexColor("#000000")
@@ -131,32 +125,27 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
     current_date = datetime.now().strftime("%d.%m.%Y %H:%M мск")
     c.setTitle(f"alfa_receipt_{datetime.now().strftime('%d.%m.%Y')}.pdf")
 
-    # Логотип (если есть)
     logo_path = ALFA_ASSET_DIR / "logo.png"
     if logo_path.exists():
         c.drawImage(str(logo_path), LOGO_X, LOGO_Y, width=LOGO_WIDTH, height=LOGO_HEIGHT, preserveAspectRatio=True, mask='auto')
 
-    # --- Верхняя часть ---
     _draw_text(c, LEFT_X, HEADER_LABEL_Y, "Сформирована", FONT_REGULAR, 11, COLOR_GRAY)
     _draw_text(c, LEFT_X, HEADER_DATE_Y, current_date, FONT_REGULAR, 11, COLOR_GRAY)
-    _draw_text(c, LEFT_X, TITLE_Y, "Квитанция о переводе по СБП", FONT_BOLD, 21, COLOR_BLACK)
+    _draw_text(c, LEFT_X, TITLE_Y, "Квитанция о переводе по СБП", FONT_REGULAR, 21, COLOR_BLACK)  # используем обычный шрифт
 
-    # --- Левая колонка ---
     for label, y in LEFT_LABELS:
         _draw_text(c, LEFT_X, y, label, FONT_REGULAR, 11, COLOR_LIGHT_GRAY)
     for field, y in LEFT_VALUES:
         value = getattr(data, field)
-        _draw_text(c, LEFT_X, y, value, FONT_BOLD, 12, COLOR_BLACK)
+        _draw_text(c, LEFT_X, y, value, FONT_REGULAR, 12, COLOR_BLACK)
 
-    # --- Правая колонка ---
     for label, y in RIGHT_LABELS:
         _draw_text(c, RIGHT_X, y, label, FONT_REGULAR, 11, COLOR_LIGHT_GRAY)
     for field, y in RIGHT_VALUES:
         value = getattr(data, field)
-        _draw_text(c, RIGHT_X, y, value, FONT_BOLD, 12, COLOR_BLACK)
+        _draw_text(c, RIGHT_X, y, value, FONT_REGULAR, 12, COLOR_BLACK)
 
-    # --- Штампы (текстовые, цвета по умолчанию) ---
-    # Здесь можно заменить на изображения, если они есть
+    # Штампы
     stamp1_path = ALFA_ASSET_DIR / "stamp.png"
     stamp2_path = ALFA_ASSET_DIR / "stamp2.png"
 
@@ -164,13 +153,7 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
         c.drawImage(str(stamp1_path), LEFT_X, STAMP1_Y - 40, width=250, height=80, preserveAspectRatio=True, mask='auto')
     else:
         y = STAMP1_Y
-        lines1 = [
-            "АО «АЛЬФА-БАНК»",
-            "БИК 044525593 ИНН 7728168971",
-            "к/сч 30101810200000000593",
-            "",
-            "ПЕРЕВОД ВЫПОЛНЕН"
-        ]
+        lines1 = ["АО «АЛЬФА-БАНК»", "БИК 044525593 ИНН 7728168971", "к/сч 30101810200000000593", "", "ПЕРЕВОД ВЫПОЛНЕН"]
         for line in lines1:
             if line:
                 _draw_text(c, LEFT_X, y, line, FONT_REGULAR, 8, COLOR_BLACK)
@@ -180,13 +163,7 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
         c.drawImage(str(stamp2_path), LEFT_X, STAMP2_Y - 30, width=250, height=70, preserveAspectRatio=True, mask='auto')
     else:
         y = STAMP2_Y
-        lines2 = [
-            "alfabank.ru",
-            "АО «АЛЬФА-БАНК»",
-            "ул. Каланчёвская, 27, Москва, 107078",
-            "+7 495 620 91 91",
-            "mail@alfabank.ru"
-        ]
+        lines2 = ["alfabank.ru", "АО «АЛЬФА-БАНК»", "ул. Каланчёвская, 27, Москва, 107078", "+7 495 620 91 91", "mail@alfabank.ru"]
         for line in lines2:
             if line:
                 _draw_text(c, LEFT_X, y, line, FONT_REGULAR, 8, COLOR_BLACK)
