@@ -1,4 +1,4 @@
-"""Template for Alfa-Bank SBP receipt – exact coordinates for all elements."""
+"""Template for Alfa-Bank SBP receipt – exact coordinates and sizes."""
 
 from __future__ import annotations
 
@@ -52,7 +52,6 @@ PAGE_HEIGHT = 840.0
 LEFT_X = 35.45
 RIGHT_X = 304.75
 
-# Верхние тексты (справа)
 HEADER_LABEL_X = 484.40
 HEADER_LABEL_Y = PAGE_HEIGHT - 37.975   # 802.025
 HEADER_DATE_X = 453.998
@@ -60,7 +59,6 @@ HEADER_DATE_Y = PAGE_HEIGHT - 54.467    # 785.533
 
 TITLE_Y = 736.78
 
-# Левые названия и значения
 LEFT_LABELS = [
     ("Сумма перевода", 693.70),
     ("Комиссия", 650.80),
@@ -76,7 +74,6 @@ LEFT_VALUES = [
     ("recipient_name", 504.71),
 ]
 
-# Правые названия и значения
 RIGHT_LABELS = [
     ("Номер телефона получателя", 693.70),
     ("Банк получателя", 650.80),
@@ -92,22 +89,21 @@ RIGHT_VALUES = [
     ("transfer_message", 504.71),
 ]
 
-# === ИЗОБРАЖЕНИЯ ===
-# Координаты НИЖНЕГО ЛЕВОГО УГЛА. Подберите значения Y, если необходимо.
+# === ИЗОБРАЖЕНИЯ (координаты нижнего левого угла) ===
 LOGO_X = 35.45
-LOGO_Y = 769.55        # (840 - 35.45 - 35) – верхний край на 35.45
-LOGO_WIDTH = 35.0
-LOGO_HEIGHT = 35.0
+LOGO_Y = 769.55
+LOGO_WIDTH = 30.0
+LOGO_HEIGHT = 46.0
 
 STAMP1_X = 35.45
-STAMP1_Y = 373.68       # (840 - 386.323 - 80)
-STAMP1_WIDTH = 250.0
-STAMP1_HEIGHT = 80.0
+STAMP1_Y = 373.68
+STAMP1_WIDTH = 201.0
+STAMP1_HEIGHT = 85.09
 
 STAMP2_X = 262.85
-STAMP2_Y = 68.55        # (840 - 771.45) без вычитания высоты (высота 70 даст верхний край ~771.45)
-STAMP2_WIDTH = 250.0
-STAMP2_HEIGHT = 70.0
+STAMP2_Y = 68.55
+STAMP2_WIDTH = 297.0
+STAMP2_HEIGHT = 35.0
 
 # Цвета
 COLOR_GRAY = HexColor("#7e7e83")
@@ -126,15 +122,17 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
     current_date = datetime.now().strftime("%d.%m.%Y %H:%M мск")
     c.setTitle(f"alfa_receipt_{datetime.now().strftime('%d.%m.%Y')}.pdf")
 
-    # Изображения
+    # Логотип
     logo_path = ALFA_ASSET_DIR / "logo.png"
     if logo_path.exists():
         c.drawImage(str(logo_path), LOGO_X, LOGO_Y, width=LOGO_WIDTH, height=LOGO_HEIGHT, preserveAspectRatio=True, mask='auto')
 
+    # Штамп 1
     stamp1_path = ALFA_ASSET_DIR / "stamp.png"
     if stamp1_path.exists():
         c.drawImage(str(stamp1_path), STAMP1_X, STAMP1_Y, width=STAMP1_WIDTH, height=STAMP1_HEIGHT, preserveAspectRatio=True, mask='auto')
 
+    # Штамп 2
     stamp2_path = ALFA_ASSET_DIR / "stamp2.png"
     if stamp2_path.exists():
         c.drawImage(str(stamp2_path), STAMP2_X, STAMP2_Y, width=STAMP2_WIDTH, height=STAMP2_HEIGHT, preserveAspectRatio=True, mask='auto')
