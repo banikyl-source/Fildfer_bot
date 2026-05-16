@@ -1,4 +1,4 @@
-"""Template for T-Bank card transfer receipt (based on 17.03.2026 layout)."""
+"""Template for T-Bank card transfer receipt (based on phone receipt layout)."""
 
 from __future__ import annotations
 
@@ -92,7 +92,6 @@ _FONT_CANDIDATES: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 _fonts_registered = False
 
-
 def _ensure_fonts_registered() -> None:
     global _fonts_registered
     if _fonts_registered:
@@ -107,28 +106,23 @@ def _ensure_fonts_registered() -> None:
             raise RuntimeError(f"Font {name} not found.")
     _fonts_registered = True
 
-
 def _font_supports_text(font_name: str, text: str) -> bool:
     font = pdfmetrics.getFont(font_name)
     char_to_glyph = getattr(font.face, "charToGlyph", {})
     return all(ord(char) in char_to_glyph for char in text)
-
 
 def _font_for_text(preferred_font: str, text: str) -> str:
     if _font_supports_text(preferred_font, text):
         return preferred_font
     return FONT_FALLBACK
 
-
 def _font_for_char(preferred_font: str, char: str) -> str:
     if _font_supports_text(preferred_font, char):
         return preferred_font
     return FONT_FALLBACK
 
-
 def _mixed_text_width(c: canvas.Canvas, text: str, font_name: str, size: float) -> float:
     return sum(c.stringWidth(char, _font_for_char(font_name, char), size) for char in text)
-
 
 def _draw_text(
     c: canvas.Canvas,
@@ -145,7 +139,6 @@ def _draw_text(
         c.drawString(cursor_x, y, char)
         cursor_x += c.stringWidth(char, char_font, size)
 
-
 def _draw_right_text(
     c: canvas.Canvas,
     x: float,
@@ -155,7 +148,6 @@ def _draw_right_text(
     size: float,
 ) -> None:
     _draw_text(c, x - _mixed_text_width(c, text, font_name, size), y, text, font_name, size)
-
 
 @dataclass(slots=True)
 class Receipt17CardData:
@@ -169,15 +161,15 @@ class Receipt17CardData:
     recipient_card: str = "220220******7357"
     recipient_name: str = "Ильяс А."
     recipient_bank: str = "Сбербанк"
-    debit_account: str = "408178101000****5307"
-    operation_id_line_1: str = "A6076160011783290G100300117"
-    operation_id_line_2: str = "00117"
-    operation_type: str = "СБП"
+    # Остальные поля оставляем для совместимости с FSM, но в PDF они не выводятся
+    debit_account: str = ""
+    operation_id_line_1: str = ""
+    operation_id_line_2: str = ""
+    operation_type: str = ""
     receipt_number: str = "№ 1-127-176-643-532"
     support_label: str = "Служба поддержки"
     support_email: str = "fb@tbank.ru"
     note_text: str = "По вопросам зачисления обращайтесь к получателю"
-
 
 PAGE_WIDTH = 270.0
 PAGE_HEIGHT = 519.0
@@ -192,24 +184,25 @@ COLOR_STAMP = HexColor("#126cba")
 COLOR_DISCLAIMER = HexColor("#a04040")
 COLOR_WATERMARK = Color(0.85, 0.2, 0.2, alpha=0.09)
 
-DATE_Y = 439.84
-TOTAL_Y = 427.00
+# Координаты (подогнаны под шрифт TinkoffSans)
+DATE_Y = 432.5
+TOTAL_Y = 412.4
+TOTAL_RIGHT_X = 249.0
 
-Y_TRANSFER = 385.00
-Y_STATUS = 365.00
-Y_AMOUNT = 345.00
-Y_FEE = 324.00
-Y_SENDER = 304.00
-Y_RECIPIENT_CARD = 284.00
-Y_RECIPIENT_NAME = 264.00
-Y_RECIPIENT_BANK = 244.00
-Y_DEBIT_ACCOUNT = 224.00
-Y_IDENT_FIRST = 204.00
-Y_IDENT_SECOND = 192.92
+# Y для строк (те же, что в шаблоне для телефона, но некоторые не используются)
+Y_TRANSFER = 376.78
+Y_STATUS = 356.78
+Y_AMOUNT = 336.78
+Y_FEE = 315.78
+Y_SENDER = 295.78
+Y_RECIPIENT_CARD = 275.78   # вместо телефона
+Y_RECIPIENT_NAME = 255.78
+Y_RECIPIENT_BANK = 235.78
+# Y_DEBIT_ACCOUNT, Y_IDENT_FIRST, Y_IDENT_SECOND – удалены
 
-Y_RECEIPT_NUMBER = 67.04
-Y_NOTE = 50.04
-Y_SUPPORT = 33.04
+Y_RECEIPT_NUMBER = 58.82
+Y_NOTE = 41.82
+Y_SUPPORT = 24.82
 
 LABEL_SIZE = 9.0
 VALUE_SIZE = 9.0
@@ -217,12 +210,10 @@ TOTAL_SIZE = 16.0
 WATERMARK_SIZE = 44.0
 WATERMARK_SPACING = 118.0
 
-
 def _draw_accent_line(c: canvas.Canvas, y: float) -> None:
     c.setStrokeColor(COLOR_ACCENT)
     c.setLineWidth(1.0)
     c.line(19.0, y, 249.0, y)
-
 
 def _draw_demo_icon(c: canvas.Canvas) -> None:
     if LOGO_PATH.exists():
@@ -250,7 +241,6 @@ def _draw_demo_icon(c: canvas.Canvas) -> None:
     c.setFont(_font_for_text(FONT_BOLD, "D"), 17.0)
     c.drawCentredString(135.0, 470.3, "D")
     c.restoreState()
-
 
 def _draw_demo_stamp(c: canvas.Canvas) -> None:
     if STAMP_PATH.exists():
@@ -282,14 +272,12 @@ def _draw_demo_stamp(c: canvas.Canvas) -> None:
     c.line(x + 14.0, y + 29.0, x + 76.0, y + 18.0)
     c.restoreState()
 
-
 def _draw_right(c: canvas.Canvas, y: float, value: str, size: float = VALUE_SIZE) -> None:
     if value.strip().endswith("₽"):
         _draw_money_right(c, y, value, size, bold=False)
         return
     c.setFillColor(COLOR_TEXT)
     _draw_right_text(c, RIGHT_X, y, value.strip() or "—", FONT_REGULAR, size)
-
 
 def _draw_money_right(
     c: canvas.Canvas,
@@ -315,7 +303,6 @@ def _draw_money_right(
         c.setFont(ruble_font, size)
         c.drawString(start_x + amount_width, y, ruble)
 
-
 def _draw_bold_ruble(
     c: canvas.Canvas,
     x: float,
@@ -335,12 +322,10 @@ def _draw_bold_ruble(
     c.drawText(text_obj)
     c.restoreState()
 
-
 def _draw_pair(c: canvas.Canvas, y: float, label: str, value: str) -> None:
     c.setFillColor(COLOR_TEXT)
     _draw_text(c, MARGIN_X, y, label, FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, y, value)
-
 
 def _draw_watermark(c: canvas.Canvas) -> None:
     c.saveState()
@@ -355,13 +340,11 @@ def _draw_watermark(c: canvas.Canvas) -> None:
         c.drawString(-text_width / 2, i * WATERMARK_SPACING, text)
     c.restoreState()
 
-
 def _draw_disclaimer(c: canvas.Canvas) -> None:
     c.setFillColor(COLOR_DISCLAIMER)
     text = ""
     c.setFont(_font_for_text(FONT_BOLD, text), 7.0)
     c.drawCentredString(PAGE_WIDTH / 2, 8.0, text)
-
 
 def render_receipt_17_card_pdf(data: Receipt17CardData) -> bytes:
     _ensure_fonts_registered()
@@ -381,27 +364,41 @@ def render_receipt_17_card_pdf(data: Receipt17CardData) -> bytes:
     # Итого
     c.setFillColor(COLOR_TEXT)
     _draw_text(c, 19.0, TOTAL_Y, "Итого", FONT_BOLD, TOTAL_SIZE)
-    _draw_money_right(c, TOTAL_Y, data.total.strip() or "—", TOTAL_SIZE, bold=True)
+    amount = data.total.strip().removesuffix("₽").rstrip()
+    ruble = "i"
+    ruble_width = c.stringWidth(ruble, FONT_RUBLE_BOLD, TOTAL_SIZE)
+    amount_text = amount + " "
+    amount_width = _mixed_text_width(c, amount_text, FONT_BOLD, TOTAL_SIZE)
+    start_x = TOTAL_RIGHT_X - amount_width - ruble_width
+    c.setFillColor(COLOR_TEXT)
+    _draw_text(c, start_x, TOTAL_Y, amount_text, FONT_BOLD, TOTAL_SIZE)
+    _draw_bold_ruble(c, start_x + amount_width, TOTAL_Y, ruble, FONT_RUBLE_BOLD, TOTAL_SIZE)
     _draw_accent_line(c, 397.5)
 
-    # Ручная отрисовка строк
+    # Ручная отрисовка 8 строк
     c.setFillColor(COLOR_TEXT)
+
+    # 1. Перевод
     _draw_text(c, MARGIN_X, Y_TRANSFER, "Перевод", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_TRANSFER, data.transfer_type)
 
+    # 2. Статус
     _draw_text(c, MARGIN_X, Y_STATUS, "Статус", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_STATUS, data.status)
 
+    # 3. Сумма
     _draw_text(c, MARGIN_X, Y_AMOUNT, "Сумма", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_AMOUNT, data.amount)
 
+    # 4. Комиссия
     _draw_text(c, MARGIN_X, Y_FEE, "Комиссия", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_FEE, data.fee)
 
+    # 5. Отправитель
     _draw_text(c, MARGIN_X, Y_SENDER, "Отправитель", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_SENDER, data.sender_name)
 
-    # Белый фон для поля карты получателя
+    # 6. Карта получателя (вместо телефона)
     c.saveState()
     c.setFillColor(HexColor("#ffffff"))
     c.rect(20.0, 176.0, 230.0, 108.0, stroke=0, fill=1)
@@ -409,25 +406,15 @@ def render_receipt_17_card_pdf(data: Receipt17CardData) -> bytes:
     _draw_text(c, MARGIN_X, Y_RECIPIENT_CARD, "Карта получателя", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_RECIPIENT_CARD, data.recipient_card)
 
+    # 7. Получатель
     _draw_text(c, MARGIN_X, Y_RECIPIENT_NAME, "Получатель", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_RECIPIENT_NAME, data.recipient_name)
 
+    # 8. Банк получателя
     _draw_text(c, MARGIN_X, Y_RECIPIENT_BANK, "Банк получателя", FONT_REGULAR, LABEL_SIZE)
     _draw_right(c, Y_RECIPIENT_BANK, data.recipient_bank)
 
-    _draw_text(c, MARGIN_X, Y_DEBIT_ACCOUNT, "Счет списания", FONT_REGULAR, LABEL_SIZE)
-    _draw_right(c, Y_DEBIT_ACCOUNT, data.debit_account)
-
-    # Идентификатор операции
-    _draw_text(c, MARGIN_X, Y_IDENT_FIRST, "Идентификатор операции", FONT_REGULAR, LABEL_SIZE)
-    _draw_right(c, Y_IDENT_FIRST, data.operation_id_line_1)
-
-    _draw_text(c, MARGIN_X, Y_IDENT_SECOND, data.operation_type, FONT_REGULAR, LABEL_SIZE)
-    _draw_right(c, Y_IDENT_SECOND, data.operation_id_line_2)
-
-    _draw_accent_line(c, 80.5)
-
-    # Нижняя часть
+    # Нижние элементы (квитанция, примечания, поддержка)
     c.setFillColor(COLOR_TEXT)
     _draw_text(c, MARGIN_X, Y_RECEIPT_NUMBER, f"Квитанция  {data.receipt_number}", FONT_REGULAR, VALUE_SIZE)
     c.setFillColor(COLOR_MUTED)
@@ -448,7 +435,6 @@ def render_receipt_17_card_pdf(data: Receipt17CardData) -> bytes:
     c.showPage()
     c.save()
     return buf.getvalue()
-
 
 if __name__ == "__main__":
     Path("receipt-17-card-demo.pdf").write_bytes(render_receipt_17_card_pdf(Receipt17CardData()))
