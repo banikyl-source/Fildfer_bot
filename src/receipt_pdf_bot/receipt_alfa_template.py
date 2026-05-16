@@ -1,4 +1,4 @@
-"""Template for Alfa-Bank SBP receipt – exact coordinates for all elements."""
+"""Template for Alfa-Bank SBP receipt – exact original Y coordinates."""
 
 from __future__ import annotations
 
@@ -48,35 +48,16 @@ class AlfaReceiptData:
 PAGE_WIDTH = 600.0
 PAGE_HEIGHT = 840.0
 
-# Координаты из оригинального PDF (Y от нижнего края)
+# === ОРИГИНАЛЬНЫЕ КООРДИНАТЫ (из вашего первого extract_coords.py) ===
 LEFT_X = 35.45
 RIGHT_X = 304.75
 
-# === Изображения ===
-# logo.png (левый верхний угол, top=35.45)
-LOGO_X = 35.45
-LOGO_Y = PAGE_HEIGHT - 35.45
-LOGO_WIDTH = 35.0
-LOGO_HEIGHT = 35.0
+# Верхние тексты (оригинальные Y)
+HEADER_LABEL_Y = 806.44      # "Сформирована"
+HEADER_DATE_Y = 790.15       # "14.05.2026 23:09 мск" – но дата будет подставляться текущая
+TITLE_Y = 736.78             # "Квитанция о переводе по СБП"
 
-# stamp.png (левый штамп, top=386.323)
-STAMP1_X = 35.45
-STAMP1_Y = PAGE_HEIGHT - 386.323
-STAMP1_WIDTH = 250.0
-STAMP1_HEIGHT = 80.0
-
-# stamp2.png (правый штамп, top=771.45)
-STAMP2_X = 262.85
-STAMP2_Y = PAGE_HEIGHT - 771.45
-STAMP2_WIDTH = 250.0
-STAMP2_HEIGHT = 70.0
-
-# Верхний текст
-HEADER_LABEL_Y = 806.44   # "Сформирована"
-HEADER_DATE_Y = 790.15    # дата
-TITLE_Y = 736.78          # заголовок
-
-# Левые названия (серые) и значения (чёрные)
+# Левые названия (Y из оригинала)
 LEFT_LABELS = [
     ("Сумма перевода", 693.70),
     ("Комиссия", 650.80),
@@ -84,6 +65,7 @@ LEFT_LABELS = [
     ("Номер операции", 565.02),
     ("Получатель", 522.12),
 ]
+# Левые значения
 LEFT_VALUES = [
     ("amount", 676.29),
     ("fee", 633.39),
@@ -92,7 +74,7 @@ LEFT_VALUES = [
     ("recipient_name", 504.71),
 ]
 
-# Правые названия (серые) и значения (чёрные)
+# Правые названия
 RIGHT_LABELS = [
     ("Номер телефона получателя", 693.70),
     ("Банк получателя", 650.80),
@@ -100,6 +82,7 @@ RIGHT_LABELS = [
     ("Идентификатор операции в СБП", 565.02),
     ("Сообщение получателю", 522.12),
 ]
+# Правые значения
 RIGHT_VALUES = [
     ("recipient_phone", 676.29),
     ("recipient_bank", 633.39),
@@ -107,6 +90,25 @@ RIGHT_VALUES = [
     ("sbp_id", 547.61),
     ("transfer_message", 504.71),
 ]
+
+# Логотип и штампы (координаты из вашего последнего сообщения)
+# logo.png: левый верхний угол (X=35.45, Y_top=35.45)
+LOGO_X = 35.45
+LOGO_Y = PAGE_HEIGHT - 35.45
+LOGO_WIDTH = 35.0
+LOGO_HEIGHT = 35.0
+
+# stamp.png: левый штамп (X=35.45, Y_top=386.323)
+STAMP1_X = 35.45
+STAMP1_Y = PAGE_HEIGHT - 386.323
+STAMP1_WIDTH = 250.0
+STAMP1_HEIGHT = 80.0
+
+# stamp2.png: правый штамп (X=262.85, Y_top=771.45)
+STAMP2_X = 262.85
+STAMP2_Y = PAGE_HEIGHT - 771.45
+STAMP2_WIDTH = 250.0
+STAMP2_HEIGHT = 70.0
 
 # Цвета
 COLOR_GRAY = HexColor("#7e7e83")
@@ -125,11 +127,12 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
     current_date = datetime.now().strftime("%d.%m.%Y %H:%M мск")
     c.setTitle(f"alfa_receipt_{datetime.now().strftime('%d.%m.%Y')}.pdf")
 
-    # Изображения (если файлы существуют)
+    # Логотип
     logo_path = ALFA_ASSET_DIR / "logo.png"
     if logo_path.exists():
         c.drawImage(str(logo_path), LOGO_X, LOGO_Y, width=LOGO_WIDTH, height=LOGO_HEIGHT, preserveAspectRatio=True, mask='auto')
 
+    # Штампы
     stamp1_path = ALFA_ASSET_DIR / "stamp.png"
     if stamp1_path.exists():
         c.drawImage(str(stamp1_path), STAMP1_X, STAMP1_Y, width=STAMP1_WIDTH, height=STAMP1_HEIGHT, preserveAspectRatio=True, mask='auto')
