@@ -73,7 +73,7 @@ TEMPLATE_17_PHONE = "tbank_phone"
 TEMPLATE_17_CARD = "tbank_card"
 TEMPLATE_ALFA = "alfa"
 
-# ---------- ПОЛЯ И ПОРЯДОК ШАГОВ ----------
+# ---------- ПОРЯДОК ПОЛЕЙ ДЛЯ КАЖДОГО ШАБЛОНА ----------
 _FIELD_BY_STATE = {
     FillReceipt.template.state: "template_id",
     FillReceipt.datetime_text.state: "datetime_text",
@@ -91,7 +91,7 @@ _FIELD_BY_STATE = {
     FillReceipt.transfer_message.state: "transfer_message",
 }
 
-# Для СберБанка (классический)
+# СберБанк
 _FIELD_ORDER_CLASSIC = (
     FillReceipt.datetime_text,
     FillReceipt.operation,
@@ -106,8 +106,8 @@ _FIELD_ORDER_CLASSIC = (
     FillReceipt.receipt_number,
 )
 
-# Для Т-банк (по телефону и по карте) – одинаковый порядок полей
-_FIELD_ORDER_TBANK = (
+# Т-банк (по телефону)
+_FIELD_ORDER_TBANK_PHONE = (
     FillReceipt.datetime_text,
     FillReceipt.operation,
     FillReceipt.amount,
@@ -122,7 +122,20 @@ _FIELD_ORDER_TBANK = (
     FillReceipt.receipt_number,
 )
 
-# Для Альфа-Банка
+# Т-банк (по карте) – только нужные поля, без счёта списания, номера операции и кода
+_FIELD_ORDER_TBANK_CARD = (
+    FillReceipt.datetime_text,
+    FillReceipt.operation,
+    FillReceipt.amount,
+    FillReceipt.fee,
+    FillReceipt.sender_name,
+    FillReceipt.recipient_card,
+    FillReceipt.recipient_name,
+    FillReceipt.recipient_bank,
+    FillReceipt.receipt_number,
+)
+
+# Альфа-Банк
 _FIELD_ORDER_ALFA = (
     FillReceipt.datetime_text,
     FillReceipt.amount,
@@ -150,6 +163,7 @@ _ALFA_PROMPTS = {
     FillReceipt.transfer_message.state: "✉️ Введите сообщение получателю (пример: Перевод денежных средств):",
 }
 
+# Общие подсказки для СберБанка и Т-банк (по телефону)
 _NEXT_PROMPT = {
     FillReceipt.datetime_text.state: "<b>Шаг 1/11.</b> Введите дату и время операции.\nПример: <code>5 апреля 2026 20:29:42 (МСК)</code>",
     FillReceipt.operation.state: "<b>Шаг 2/11.</b> Название операции.\nПример: <code>Перевод клиенту</code>",
@@ -163,6 +177,19 @@ _NEXT_PROMPT = {
     FillReceipt.document_number.state: "<b>Шаг 9/11.</b> Номер документа (идентификатор, первая строка).\nПример: <code>A6076160011783290G100300117</code>",
     FillReceipt.auth_code.state: "<b>Шаг 10/11.</b> Код авторизации (вторая строка).\nПример: <code>00117</code>",
     FillReceipt.receipt_number.state: "<b>Шаг 11/11.</b> Номер квитанции (отдельно от идентификатора).\nПример: <code>№ 1-127-176-643-532</code>",
+}
+
+# Подсказки для Т-банк (по карте) – убраны лишние шаги
+_CARD_PROMPTS = {
+    FillReceipt.datetime_text.state: "<b>Шаг 1/9.</b> Введите дату и время операции.\nПример: <code>5 апреля 2026 20:29:42 (МСК)</code>",
+    FillReceipt.operation.state: "<b>Шаг 2/9.</b> Тип перевода (по умолчанию «По номеру карты»).\nОтправьте <code>-</code>, чтобы оставить по умолчанию.",
+    FillReceipt.amount.state: "<b>Шаг 3/9.</b> Сумма перевода.\nПример: <code>259,00 ₽</code>",
+    FillReceipt.fee.state: "<b>Шаг 4/9.</b> Комиссия.\nПример: <code>0,00 ₽</code>",
+    FillReceipt.sender_name.state: "<b>Шаг 5/9.</b> ФИО отправителя.\nПример: <code>Михаил Видинеев</code>",
+    FillReceipt.recipient_card.state: "<b>Шаг 6/9.</b> Номер карты получателя (16 цифр).\nПример: <code>220220******7357</code>",
+    FillReceipt.recipient_name.state: "<b>Шаг 7/9.</b> ФИО получателя.\nПример: <code>Ильяс А.</code>",
+    FillReceipt.recipient_bank.state: "<b>Шаг 8/9.</b> Банк получателя.\nПример: <code>Сбербанк</code>",
+    FillReceipt.receipt_number.state: "<b>Шаг 9/9.</b> Номер квитанции.\nПример: <code>№ 1-127-176-643-532</code>",
 }
 
 _TEMPLATE_17_DEFAULTS = Receipt17Data()
@@ -306,8 +333,10 @@ def _normalize_value(text: str) -> str:
     return "" if text in {"-", "—", "_"} else text
 
 def _field_order_for_template(template_id: str):
-    if template_id == TEMPLATE_17_PHONE or template_id == TEMPLATE_17_CARD:
-        return _FIELD_ORDER_TBANK
+    if template_id == TEMPLATE_17_PHONE:
+        return _FIELD_ORDER_TBANK_PHONE
+    if template_id == TEMPLATE_17_CARD:
+        return _FIELD_ORDER_TBANK_CARD
     if template_id == TEMPLATE_ALFA:
         return _FIELD_ORDER_ALFA
     return _FIELD_ORDER_CLASSIC
@@ -322,6 +351,8 @@ def _next_state_for_template(current_state: str, template_id: str) -> Optional[S
 def _prompt_for_state(state: State, template_id: str) -> str:
     if template_id == TEMPLATE_ALFA:
         return _ALFA_PROMPTS.get(state.state, "Введите значение:")
+    if template_id == TEMPLATE_17_CARD:
+        return _CARD_PROMPTS.get(state.state, "Введите значение:")
     if template_id == TEMPLATE_17_PHONE:
         if state.state == FillReceipt.recipient_card.state:
             return "📞 Введите номер телефона получателя (10 цифр без +):"
@@ -329,51 +360,6 @@ def _prompt_for_state(state: State, template_id: str) -> str:
         label, default = _TEMPLATE_17_FIELD_HINTS[field_name]
         states = _field_order_for_template(template_id)
         step = next(i for i, s in enumerate(states, 1) if s.state == state.state)
-        return (
-            f"<b>Шаг {step}/{len(states)}.</b> {label}.\n"
-            f"По умолчанию: <code>{default}</code>\n"
-            "Отправьте новое значение или <code>-</code>, чтобы оставить как в образце."
-        )
-    if template_id == TEMPLATE_17_CARD:
-        if state.state == FillReceipt.recipient_card.state:
-            return "💳 Введите номер карты получателя (16 цифр):"
-        if state.state == FillReceipt.recipient_bank.state:
-            return "🏦 Введите банк получателя (пример: Сбербанк):"
-        if state.state == FillReceipt.operation.state:
-            return "✏️ Введите тип перевода (по умолчанию «По номеру карты»):"
-        # Для остальных полей используем значения по умолчанию из Receipt17CardData
-        card_defaults = Receipt17CardData()
-        default_map = {
-            "datetime_text": card_defaults.datetime_text,
-            "operation": card_defaults.transfer_type,
-            "amount": card_defaults.amount,
-            "fee": card_defaults.fee,
-            "sender_name": card_defaults.sender_name,
-            "recipient_name": card_defaults.recipient_name,
-            "recipient_bank": card_defaults.recipient_bank,
-            "sender_account": card_defaults.debit_account,
-            "document_number": card_defaults.operation_id_line_1,
-            "auth_code": card_defaults.operation_id_line_2,
-            "receipt_number": card_defaults.receipt_number,
-        }
-        field_name = _FIELD_BY_STATE[state.state]
-        default = default_map.get(field_name, "—")
-        states = _field_order_for_template(template_id)
-        step = next(i for i, s in enumerate(states, 1) if s.state == state.state)
-        label_map = {
-            "datetime_text": "Дата и время",
-            "operation": "Тип перевода",
-            "amount": "Сумма",
-            "fee": "Комиссия",
-            "sender_name": "Отправитель",
-            "recipient_name": "Получатель",
-            "recipient_bank": "Банк получателя",
-            "sender_account": "Счёт списания",
-            "document_number": "Идентификатор операции (первая строка)",
-            "auth_code": "Код авторизации (вторая строка)",
-            "receipt_number": "Номер квитанции",
-        }
-        label = label_map.get(field_name, field_name)
         return (
             f"<b>Шаг {step}/{len(states)}.</b> {label}.\n"
             f"По умолчанию: <code>{default}</code>\n"
@@ -422,8 +408,6 @@ def _render_template_pdf(values: Dict[str, Any], template_id: str) -> tuple[byte
     elif template_id == TEMPLATE_17_CARD:
         defaults = Receipt17CardData()
         amount = values.get("amount") or defaults.amount
-        doc_num = values.get("document_number") or defaults.operation_id_line_1
-        auth = values.get("auth_code") or defaults.operation_id_line_2
         receipt_num = values.get("receipt_number") or defaults.receipt_number
         receipt = Receipt17CardData(
             datetime_text=values.get("datetime_text") or defaults.datetime_text,
@@ -436,9 +420,6 @@ def _render_template_pdf(values: Dict[str, Any], template_id: str) -> tuple[byte
             recipient_card=values.get("recipient_card") or defaults.recipient_card,
             recipient_name=values.get("recipient_name") or defaults.recipient_name,
             recipient_bank=values.get("recipient_bank") or defaults.recipient_bank,
-            debit_account=values.get("sender_account") or defaults.debit_account,
-            operation_id_line_1=doc_num,
-            operation_id_line_2=auth,
             receipt_number=receipt_num,
         )
         return render_receipt_17_card_pdf(receipt), f"receipt_card_{current_date}.pdf"
