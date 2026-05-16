@@ -1,4 +1,4 @@
-"""Template for Alfa-Bank SBP receipt – exact original Y coordinates."""
+"""Template for Alfa-Bank SBP receipt – corrected right-aligned header."""
 
 from __future__ import annotations
 
@@ -48,16 +48,20 @@ class AlfaReceiptData:
 PAGE_WIDTH = 600.0
 PAGE_HEIGHT = 840.0
 
-# === ОРИГИНАЛЬНЫЕ КООРДИНАТЫ (из вашего первого extract_coords.py) ===
+# === ОРИГИНАЛЬНЫЕ КООРДИНАТЫ ===
 LEFT_X = 35.45
 RIGHT_X = 304.75
 
-# Верхние тексты (оригинальные Y)
-HEADER_LABEL_Y = 806.44      # "Сформирована"
-HEADER_DATE_Y = 790.15       # "14.05.2026 23:09 мск" – но дата будет подставляться текущая
-TITLE_Y = 736.78             # "Квитанция о переводе по СБП"
+# Верхние тексты (теперь справа)
+HEADER_LABEL_X = 484.40
+HEADER_LABEL_Y = PAGE_HEIGHT - 37.975   # 802.025
+HEADER_DATE_X = 453.998
+HEADER_DATE_Y = PAGE_HEIGHT - 54.467    # 785.533
 
-# Левые названия (Y из оригинала)
+# Заголовок остаётся слева
+TITLE_Y = 736.78
+
+# Левые названия и значения (без изменений)
 LEFT_LABELS = [
     ("Сумма перевода", 693.70),
     ("Комиссия", 650.80),
@@ -65,7 +69,6 @@ LEFT_LABELS = [
     ("Номер операции", 565.02),
     ("Получатель", 522.12),
 ]
-# Левые значения
 LEFT_VALUES = [
     ("amount", 676.29),
     ("fee", 633.39),
@@ -74,7 +77,7 @@ LEFT_VALUES = [
     ("recipient_name", 504.71),
 ]
 
-# Правые названия
+# Правые названия и значения
 RIGHT_LABELS = [
     ("Номер телефона получателя", 693.70),
     ("Банк получателя", 650.80),
@@ -82,7 +85,6 @@ RIGHT_LABELS = [
     ("Идентификатор операции в СБП", 565.02),
     ("Сообщение получателю", 522.12),
 ]
-# Правые значения
 RIGHT_VALUES = [
     ("recipient_phone", 676.29),
     ("recipient_bank", 633.39),
@@ -91,20 +93,17 @@ RIGHT_VALUES = [
     ("transfer_message", 504.71),
 ]
 
-# Логотип и штампы (координаты из вашего последнего сообщения)
-# logo.png: левый верхний угол (X=35.45, Y_top=35.45)
+# Логотип и штампы (координаты из ваших данных)
 LOGO_X = 35.45
 LOGO_Y = PAGE_HEIGHT - 35.45
 LOGO_WIDTH = 35.0
 LOGO_HEIGHT = 35.0
 
-# stamp.png: левый штамп (X=35.45, Y_top=386.323)
 STAMP1_X = 35.45
 STAMP1_Y = PAGE_HEIGHT - 386.323
 STAMP1_WIDTH = 250.0
 STAMP1_HEIGHT = 80.0
 
-# stamp2.png: правый штамп (X=262.85, Y_top=771.45)
 STAMP2_X = 262.85
 STAMP2_Y = PAGE_HEIGHT - 771.45
 STAMP2_WIDTH = 250.0
@@ -127,12 +126,11 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
     current_date = datetime.now().strftime("%d.%m.%Y %H:%M мск")
     c.setTitle(f"alfa_receipt_{datetime.now().strftime('%d.%m.%Y')}.pdf")
 
-    # Логотип
+    # Изображения
     logo_path = ALFA_ASSET_DIR / "logo.png"
     if logo_path.exists():
         c.drawImage(str(logo_path), LOGO_X, LOGO_Y, width=LOGO_WIDTH, height=LOGO_HEIGHT, preserveAspectRatio=True, mask='auto')
 
-    # Штампы
     stamp1_path = ALFA_ASSET_DIR / "stamp.png"
     if stamp1_path.exists():
         c.drawImage(str(stamp1_path), STAMP1_X, STAMP1_Y, width=STAMP1_WIDTH, height=STAMP1_HEIGHT, preserveAspectRatio=True, mask='auto')
@@ -142,8 +140,8 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
         c.drawImage(str(stamp2_path), STAMP2_X, STAMP2_Y, width=STAMP2_WIDTH, height=STAMP2_HEIGHT, preserveAspectRatio=True, mask='auto')
 
     # Тексты
-    _draw_text(c, LEFT_X, HEADER_LABEL_Y, "Сформирована", 11, COLOR_GRAY)
-    _draw_text(c, LEFT_X, HEADER_DATE_Y, current_date, 11, COLOR_GRAY)
+    _draw_text(c, HEADER_LABEL_X, HEADER_LABEL_Y, "Сформирована", 11, COLOR_GRAY)
+    _draw_text(c, HEADER_DATE_X, HEADER_DATE_Y, current_date, 11, COLOR_GRAY)
     _draw_text(c, LEFT_X, TITLE_Y, "Квитанция о переводе по СБП", 21, COLOR_BLACK)
 
     for label, y in LEFT_LABELS:
