@@ -106,14 +106,14 @@ _FIELD_ORDER_CLASSIC = (
     FillReceipt.receipt_number,
 )
 
-# Для Т-банк (по телефону) и Т-банк (по карте) – одинаковый порядок полей
+# Для Т-банк (по телефону и по карте) – одинаковый порядок полей
 _FIELD_ORDER_TBANK = (
     FillReceipt.datetime_text,
     FillReceipt.operation,
     FillReceipt.amount,
     FillReceipt.fee,
     FillReceipt.sender_name,
-    FillReceipt.recipient_card,      # телефон или карта
+    FillReceipt.recipient_card,
     FillReceipt.recipient_name,
     FillReceipt.recipient_bank,
     FillReceipt.sender_account,
@@ -136,7 +136,7 @@ _FIELD_ORDER_ALFA = (
     FillReceipt.transfer_message,
 )
 
-# Подсказки для разных шаблонов
+# Подсказки для Альфа-Банка
 _ALFA_PROMPTS = {
     FillReceipt.datetime_text.state: "📅 Введите дату и время перевода (пример: 19.11.2025 20:21:45 мск):",
     FillReceipt.amount.state: "💰 Введите сумму перевода (пример: 26 200 RUR):",
@@ -190,7 +190,7 @@ _TEMPLATE_NAMES = {
 
 _RECEIPT_DATA_FIELDS = set(ReceiptData.__dataclass_fields__)
 
-# ---------- СИСТЕМА КЛЮЧЕЙ (функции) ----------
+# ---------- СИСТЕМА КЛЮЧЕЙ ----------
 def load_keys() -> Set[str]:
     if not os.path.exists(KEYS_FILE):
         with open(KEYS_FILE, "w") as f:
@@ -325,7 +325,6 @@ def _prompt_for_state(state: State, template_id: str) -> str:
     if template_id == TEMPLATE_17_PHONE:
         if state.state == FillReceipt.recipient_card.state:
             return "📞 Введите номер телефона получателя (10 цифр без +):"
-        # остальные подсказки из _TEMPLATE_17_FIELD_HINTS
         field_name = _FIELD_BY_STATE[state.state]
         label, default = _TEMPLATE_17_FIELD_HINTS[field_name]
         states = _field_order_for_template(template_id)
@@ -342,9 +341,7 @@ def _prompt_for_state(state: State, template_id: str) -> str:
             return "🏦 Введите банк получателя (пример: Сбербанк):"
         if state.state == FillReceipt.operation.state:
             return "✏️ Введите тип перевода (по умолчанию «По номеру карты»):"
-        # общие подсказки, но с изменёнными значениями по умолчанию
-        field_name = _FIELD_BY_STATE[state.state]
-        # зададим свои дефолты для карточного чека
+        # Для остальных полей используем значения по умолчанию из Receipt17CardData
         card_defaults = Receipt17CardData()
         default_map = {
             "datetime_text": card_defaults.datetime_text,
@@ -359,6 +356,7 @@ def _prompt_for_state(state: State, template_id: str) -> str:
             "auth_code": card_defaults.operation_id_line_2,
             "receipt_number": card_defaults.receipt_number,
         }
+        field_name = _FIELD_BY_STATE[state.state]
         default = default_map.get(field_name, "—")
         states = _field_order_for_template(template_id)
         step = next(i for i, s in enumerate(states, 1) if s.state == state.state)
