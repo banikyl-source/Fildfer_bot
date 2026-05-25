@@ -1,4 +1,6 @@
-"""Template for T-Bank card transfer receipt – exact coordinates from Master PDF Editor."""
+"""Template for T-Bank card transfer receipt – exact coordinates from Master PDF Editor.
+Исправлено: убран штамп, исправлен вывод суммы, удалён водяной знак (пустой).
+"""
 
 from __future__ import annotations
 
@@ -23,7 +25,7 @@ ASSET_DIR = Path(__file__).parent / "assets"
 FONT_DIR = ASSET_DIR / "fonts"
 RECEIPT17_ASSET_DIR = ASSET_DIR / "receipt17"
 LOGO_PATH = RECEIPT17_ASSET_DIR / "logo.png"
-STAMP_PATH = RECEIPT17_ASSET_DIR / "stamp.png"
+# Штамп больше не используется, но путь оставим на случай, если уберёте вызов
 
 _FONT_CANDIDATES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
@@ -172,23 +174,15 @@ PAGE_WIDTH = 270.0
 PAGE_HEIGHT = 471.0
 
 # ========== КООРДИНАТЫ (Y = PAGE_HEIGHT - top) ==========
-# Логотип (нижний левый угол)
 LOGO_X = 121.0
 LOGO_Y = PAGE_HEIGHT - 28.0 - 28.0
 LOGO_W = 28.0
 LOGO_H = 28.0
 
-# Штамп
-STAMP_X = 66.0
-STAMP_Y = PAGE_HEIGHT - 304.0 - 63.23
-STAMP_W = 175.0
-STAMP_H = 63.23
-
 # Жёлтые линии
 TOP_LINE_X = 19.0
 TOP_LINE_Y = PAGE_HEIGHT - 120.5 - 2.0
 TOP_LINE_W = 232.0
-
 BOTTOM_LINE_X = 19.0
 BOTTOM_LINE_Y = PAGE_HEIGHT - 389.5 - 2.0
 BOTTOM_LINE_W = 232.0
@@ -205,23 +199,17 @@ TOTAL_LABEL_Y = PAGE_HEIGHT - 96.082
 TOTAL_LABEL_FONT = FONT_BOLD
 TOTAL_LABEL_SIZE = 16.0
 
-# Сумма итога (правая часть)
-TOTAL_AMOUNT_X = 218.260   # правый край, от которого выравнивается текст
+# Сумма итога (правый край)
+TOTAL_AMOUNT_X = 218.260
 TOTAL_AMOUNT_Y = PAGE_HEIGHT - 95.842
 TOTAL_AMOUNT_FONT = FONT_BOLD
 TOTAL_AMOUNT_SIZE = 16.0
-
-# Символ рубля итога
-RUBLE_X = 239.913
-RUBLE_Y = PAGE_HEIGHT - 95.143
-RUBLE_FONT = FONT_RUBLE_BOLD
-RUBLE_SIZE = 16.0
 
 # Основные поля (левая колонка – название, правая – значение)
 FIELDS = [
     ("Перевод", 20.783, 136.298, "transfer_type", 186.833, 136.298),
     ("Статус", 20.432, 156.217, "status", 216.777, 156.298),
-    ("Сумма", 20.432, 176.217, "amount", 233.489, 176.217),
+    # Поле "Сумма" будет обработано отдельно, чтобы правильно отображать рубли
     ("Комиссия", 20.783, 197.298, "fee", 198.883, 197.298),
     ("Отправитель", 20.432, 217.217, "sender_name", 183.665, 217.298),
     ("Карта получателя", 20.783, 237.298, "recipient_card", 181.447, 237.082),
@@ -229,16 +217,12 @@ FIELDS = [
     ("Банк получателя", 20.783, 277.298, "recipient_bank", 214.152, 276.569),
 ]
 
-# Отдельно число и рубль для строки "Сумма"
-AMOUNT_NUMBER_X = 233.489
-AMOUNT_NUMBER_Y = PAGE_HEIGHT - 176.217
-AMOUNT_NUMBER_FONT = FONT_BOLD
-AMOUNT_NUMBER_SIZE = 9.0
-
-RUBLE_SIGN_X = 245.036
-RUBLE_SIGN_Y = PAGE_HEIGHT - 175.920
-RUBLE_SIGN_FONT = FONT_RUBLE_BOLD
-RUBLE_SIGN_SIZE = 9.0
+# Координаты для строки "Сумма" (отдельно, чтобы использовать _draw_money_right)
+SUM_LABEL_X = 20.432
+SUM_LABEL_Y = PAGE_HEIGHT - 176.217
+SUM_VALUE_Y = PAGE_HEIGHT - 176.217
+SUM_VALUE_RIGHT_X = 233.489  # правый край для выравнивания суммы
+SUM_VALUE_SIZE = 9.0
 
 # Нижние тексты
 RECEIPT_X = 20.783
@@ -255,12 +239,8 @@ COLOR_TEXT = HexColor("#333333")
 COLOR_MUTED = HexColor("#909090")
 COLOR_ACCENT = HexColor("#ffdd2d")
 COLOR_LINK = HexColor("#1771d6")
-COLOR_STAMP = HexColor("#126cba")
 COLOR_DISCLAIMER = HexColor("#a04040")
 COLOR_WATERMARK = Color(0.85, 0.2, 0.2, alpha=0.09)
-
-WATERMARK_SIZE = 44.0
-WATERMARK_SPACING = 118.0
 
 # ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 def _draw_accent_line(c: canvas.Canvas, x: float, y: float, width: float) -> None:
@@ -272,6 +252,7 @@ def _draw_demo_icon(c: canvas.Canvas) -> None:
     if LOGO_PATH.exists():
         c.drawImage(str(LOGO_PATH), LOGO_X, LOGO_Y, width=LOGO_W, height=LOGO_H, preserveAspectRatio=True, mask='auto')
         return
+    # fallback: жёлтый кружок с буквой D (но лучше иметь реальный логотип)
     c.saveState()
     c.setFillColor(COLOR_ACCENT)
     path = c.beginPath()
@@ -287,24 +268,12 @@ def _draw_demo_icon(c: canvas.Canvas) -> None:
     c.drawCentredString(135.0, 470.3, "D")
     c.restoreState()
 
-def _draw_demo_stamp(c: canvas.Canvas) -> None:
-    if STAMP_PATH.exists():
-        c.drawImage(str(STAMP_PATH), STAMP_X, STAMP_Y, width=STAMP_W, height=STAMP_H, preserveAspectRatio=True, mask='auto')
-        return
-    c.saveState()
-    x = STAMP_X
-    y = STAMP_Y + STAMP_H - 12
-    c.setFillColor(COLOR_STAMP)
-    _draw_text(c, x, y, "ДЕМО-БАНК", FONT_BOLD, 12)
-    y -= 12
-    _draw_text(c, x, y, "БИК 000000000 ИНН 0000000000", FONT_REGULAR, 8)
-    c.restoreState()
-
 def _draw_money_right(c: canvas.Canvas, y: float, value: str, size: float, bold: bool = False, right_x: float = None) -> None:
+    """Рисует сумму с символом рубля (i), выровненную по правому краю right_x."""
     if right_x is None:
         right_x = PAGE_WIDTH - 10
     amount = value.strip().removesuffix("₽").rstrip()
-    ruble = "i"
+    ruble = "i"  # специальный символ в шрифте ALSRubl
     amount_font = FONT_BOLD if bold else FONT_REGULAR
     ruble_font = FONT_RUBLE_BOLD if bold else FONT_RUBLE
     ruble_width = c.stringWidth(ruble, ruble_font, size)
@@ -326,29 +295,18 @@ def _draw_bold_ruble(c: canvas.Canvas, x: float, y: float, text: str, font_name:
     c.setLineWidth(size / 30.0)
     text_obj = c.beginText(x, y)
     text_obj.setFont(font_name, size)
-    text_obj.setTextRenderMode(2)
+    text_obj.setTextRenderMode(2)  # контур + заливка
     text_obj.textOut(text)
     c.drawText(text_obj)
     c.restoreState()
 
 def _draw_watermark(c: canvas.Canvas) -> None:
-    c.saveState()
-    c.translate(PAGE_WIDTH / 2, PAGE_HEIGHT / 2)
-    c.rotate(35)
-    c.setFillColor(COLOR_WATERMARK)
-    text = ""
-    c.setFont(_font_for_text(FONT_BOLD, text), WATERMARK_SIZE)
-    text_width = c.stringWidth(text, FONT_BOLD, WATERMARK_SIZE)
-    half = int(PAGE_HEIGHT / WATERMARK_SPACING) + 1
-    for i in range(-half, half + 1):
-        c.drawString(-text_width / 2, i * WATERMARK_SPACING, text)
-    c.restoreState()
+    # Полностью убираем водяной знак (ничего не рисуем)
+    pass
 
 def _draw_disclaimer(c: canvas.Canvas) -> None:
-    c.setFillColor(COLOR_DISCLAIMER)
-    text = ""
-    c.setFont(_font_for_text(FONT_BOLD, text), 7.0)
-    c.drawCentredString(PAGE_WIDTH / 2, 8.0, text)
+    # В оригинальном чеке нет дисклеймера, оставляем пустым
+    pass
 
 def render_receipt_17_card_pdf(data: Receipt17CardData) -> bytes:
     _ensure_fonts_registered()
@@ -358,9 +316,8 @@ def render_receipt_17_card_pdf(data: Receipt17CardData) -> bytes:
     c.setAuthor("receipt-pdf-bot (card transfer template)")
     c.setSubject("Демонстрационная квитанция, не имеет юридической силы")
 
-    _draw_watermark(c)
+    # Рисуем только логотип, без штампа и водяного знака
     _draw_demo_icon(c)
-    _draw_demo_stamp(c)
 
     # Дата
     c.setFillColor(COLOR_MUTED)
@@ -376,18 +333,22 @@ def render_receipt_17_card_pdf(data: Receipt17CardData) -> bytes:
     # Верхняя жёлтая линия
     _draw_accent_line(c, TOP_LINE_X, TOP_LINE_Y, TOP_LINE_W)
 
-    # Основные поля (левый столбец – названия, правый – значения)
-    for label, lx, top_l, field, rx, top_r in FIELDS:
+    # Левая колонка: названия полей (кроме "Сумма", её рисуем отдельно)
+    for label, lx, top_l, field, _, _ in FIELDS:
         y_l = PAGE_HEIGHT - top_l
-        y_r = PAGE_HEIGHT - top_r
         c.setFillColor(COLOR_TEXT)
         _draw_text(c, lx, y_l, label, FONT_REGULAR, 9.0)
+
+    # Правая колонка: значения (кроме суммы)
+    for _, _, _, field, rx, top_r in FIELDS:
+        y_r = PAGE_HEIGHT - top_r
         value = getattr(data, field)
         _draw_text(c, rx, y_r, value, FONT_REGULAR, 9.0)
 
-    # Дополнительно: число и рубль для строки "Сумма" (так как data.amount содержит "10 000 ₽", но мы выводим отдельно)
-    _draw_text(c, AMOUNT_NUMBER_X, AMOUNT_NUMBER_Y, "10 000", AMOUNT_NUMBER_FONT, AMOUNT_NUMBER_SIZE)
-    _draw_text(c, RUBLE_SIGN_X, RUBLE_SIGN_Y, "i", RUBLE_SIGN_FONT, RUBLE_SIGN_SIZE)
+    # Отдельно рисуем строку "Сумма" с правильным форматированием рублей
+    c.setFillColor(COLOR_TEXT)
+    _draw_text(c, SUM_LABEL_X, SUM_LABEL_Y, "Сумма", FONT_REGULAR, 9.0)
+    _draw_money_right(c, SUM_VALUE_Y, data.amount, SUM_VALUE_SIZE, bold=False, right_x=SUM_VALUE_RIGHT_X)
 
     # Нижняя жёлтая линия
     _draw_accent_line(c, BOTTOM_LINE_X, BOTTOM_LINE_Y, BOTTOM_LINE_W)
@@ -403,14 +364,24 @@ def render_receipt_17_card_pdf(data: Receipt17CardData) -> bytes:
     c.setFillColor(COLOR_LINK)
     _draw_text(c, SUPPORT_EMAIL_X, SUPPORT_EMAIL_Y, data.support_email, FONT_REGULAR, 9.0)
 
+    # Тонкая серая рамка (опционально, в оригинале есть)
     c.setStrokeColor(HexColor("#c2c2c2"))
     c.setLineWidth(0.25)
     c.line(1.0, 1.0, PAGE_WIDTH - 1.0, 1.0)
-    _draw_disclaimer(c)
 
     c.showPage()
     c.save()
     return buf.getvalue()
 
 if __name__ == "__main__":
-    Path("receipt-17-card-demo.pdf").write_bytes(render_receipt_17_card_pdf(Receipt17CardData()))
+    # Тестовый запуск: сгенерирует файл receipt-17-card-demo.pdf
+    test_data = Receipt17CardData(
+        datetime_text="16.05.2026 16:46:31",
+        total="10 ₽",
+        amount="10 ₽",
+        recipient_card="220220*******7357",
+        recipient_name="Ильяс А.",
+        recipient_bank="Сбербанк",
+        receipt_number="№ 1-132-150-477-390"
+    )
+    Path("receipt-17-card-demo.pdf").write_bytes(render_receipt_17_card_pdf(test_data))
