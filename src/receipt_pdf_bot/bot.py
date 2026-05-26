@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 # ---------- НАСТРОЙКИ ----------
-ADMIN_ID = 7531804130  # замените на свой Telegram ID
+ADMIN_ID = 7531804130
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     raise SystemExit("BOT_TOKEN is not set.")
@@ -50,6 +50,7 @@ USED_KEYS_FILE = "used_keys.json"
 # ---------- FSM ----------
 class FillReceipt(StatesGroup):
     template = State()
+    # общие поля (для всех шаблонов)
     datetime_text = State()
     operation = State()
     recipient_name = State()
@@ -63,6 +64,9 @@ class FillReceipt(StatesGroup):
     auth_code = State()
     receipt_number = State()
     transfer_message = State()
+    # для Альфа-банка две отдельные даты
+    header_datetime = State()
+    transfer_datetime = State()
 
 class AdminActions(StatesGroup):
     waiting_for_new_key = State()
@@ -89,6 +93,9 @@ _FIELD_BY_STATE = {
     FillReceipt.auth_code.state: "auth_code",
     FillReceipt.receipt_number.state: "receipt_number",
     FillReceipt.transfer_message.state: "transfer_message",
+    # для Альфа-банка
+    FillReceipt.header_datetime.state: "header_datetime",
+    FillReceipt.transfer_datetime.state: "transfer_datetime",
 }
 
 # СберБанк
@@ -122,7 +129,7 @@ _FIELD_ORDER_TBANK_PHONE = (
     FillReceipt.receipt_number,
 )
 
-# Т-банк (по карте) – только нужные поля, без счёта списания, номера операции и кода
+# Т-банк (по карте)
 _FIELD_ORDER_TBANK_CARD = (
     FillReceipt.datetime_text,
     FillReceipt.operation,
@@ -135,23 +142,25 @@ _FIELD_ORDER_TBANK_CARD = (
     FillReceipt.receipt_number,
 )
 
-# Альфа-Банк
+# Альфа-Банк (две даты: шапка и дата перевода)
 _FIELD_ORDER_ALFA = (
-    FillReceipt.datetime_text,
+    FillReceipt.header_datetime,      # дата в шапке
+    FillReceipt.transfer_datetime,    # дата под "Дата и время перевода"
     FillReceipt.amount,
     FillReceipt.fee,
-    FillReceipt.recipient_card,
+    FillReceipt.recipient_card,       # номер телефона получателя
     FillReceipt.recipient_bank,
     FillReceipt.sender_account,
-    FillReceipt.document_number,
-    FillReceipt.auth_code,
+    FillReceipt.document_number,      # номер операции
+    FillReceipt.auth_code,            # идентификатор СБП
     FillReceipt.recipient_name,
     FillReceipt.transfer_message,
 )
 
 # Подсказки для Альфа-Банка
 _ALFA_PROMPTS = {
-    FillReceipt.datetime_text.state: "📅 Введите дату и время перевода (пример: 19.11.2025 20:21:45 мск):",
+    FillReceipt.header_datetime.state: "📅 Введите дату и время для шапки (пример: 14.05.2026 23:09 мск):",
+    FillReceipt.transfer_datetime.state: "📅 Введите дату и время перевода (пример: 19.11.2025 20:21:45 мск):",
     FillReceipt.amount.state: "💰 Введите сумму перевода (пример: 26 200 RUR):",
     FillReceipt.fee.state: "💸 Введите комиссию (пример: 0 RUR):",
     FillReceipt.recipient_card.state: "📞 Введите номер телефона получателя (10 цифр без +):",
@@ -179,7 +188,7 @@ _NEXT_PROMPT = {
     FillReceipt.receipt_number.state: "<b>Шаг 11/11.</b> Номер квитанции (отдельно от идентификатора).\nПример: <code>№ 1-127-176-643-532</code>",
 }
 
-# Подсказки для Т-банк (по карте) – убраны лишние шаги
+# Подсказки для Т-банк (по карте)
 _CARD_PROMPTS = {
     FillReceipt.datetime_text.state: "<b>Шаг 1/9.</b> Введите дату и время операции.\nПример: <code>5 апреля 2026 20:29:42 (МСК)</code>",
     FillReceipt.operation.state: "<b>Шаг 2/9.</b> Тип перевода (по умолчанию «По номеру карты»).\nОтправьте <code>-</code>, чтобы оставить по умолчанию.",
@@ -425,7 +434,8 @@ def _render_template_pdf(values: Dict[str, Any], template_id: str) -> tuple[byte
         return render_receipt_17_card_pdf(receipt), f"receipt_card_{current_date}.pdf"
     elif template_id == TEMPLATE_ALFA:
         alfa_data = AlfaReceiptData(
-            datetime_text=values.get("datetime_text") or "19.11.2025 20:21:45 мск",
+            header_datetime=values.get("header_datetime") or "14.05.2026 23:09 мск",
+            transfer_datetime=values.get("transfer_datetime") or "19.11.2025 20:21:45 мск",
             amount=values.get("amount") or "26 200 RUR",
             recipient_phone=values.get("recipient_card") or "79273364000",
             fee=values.get("fee") or "0 RUR",
