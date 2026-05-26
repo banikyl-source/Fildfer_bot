@@ -1,4 +1,5 @@
 """Template for Alfa-Bank SBP receipt – две отдельные даты: шапка и дата перевода.
+Координаты для шапки скорректированы (left -= 1.21, top += 8.943).
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ class AlfaReceiptData:
     recipient_name: str = "Роман Павлович Б"
     transfer_message: str = "Перевод денежных средств"
 
-# Координаты для основных полей (чёрные, 12pt)
+# Координаты для основных полей (чёрные, 12pt) – без изменений
 COORDS_FROM_TOP = {
     "amount": (36.086, 168.576),
     "fee": (35.942, 211.470),
@@ -56,9 +57,9 @@ COORDS_FROM_TOP = {
     "transfer_message": (305.638, 340.332),
 }
 
-# Координаты для двух дат
-HEADER_DATE_COORDS = (453.998, 54.467)   # серая, 11pt
-TRANSFER_DATE_COORDS = (36.770, 254.364) # чёрная, 12pt
+# Координаты для двух дат (скорректированы)
+HEADER_DATE_COORDS = (452.788, 63.41)     # было (453.998, 54.467), left -1.21, top +8.943
+TRANSFER_DATE_COORDS = (36.770, 254.364)  # без изменений
 
 def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
     if not BLANK_TEMPLATE.exists():
@@ -81,7 +82,7 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
             y_bottom = page_height - y_top
             c.drawString(x_top, y_bottom, str(value))
 
-    # Дата в шапке (серая, 11pt)
+    # Дата в шапке (серая, 11pt) – новые координаты
     c.setFont(FONT_NAME, 11)
     c.setFillColor(COLOR_GRAY)
     x_top, y_top = HEADER_DATE_COORDS
