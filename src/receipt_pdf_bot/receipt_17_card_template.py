@@ -1,5 +1,4 @@
-"""Template for T-Bank card transfer receipt – coordinates adjusted by -10.368 pt vertically.
-Штамп присутствует. Все top пересчитаны по новым замерам.
+"""Template for T-Bank card transfer receipt – очередной сдвиг Итого.
 """
 
 from __future__ import annotations
@@ -8,32 +7,33 @@ from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from datetime import datetime
+import logging
 
-from reportlab.lib.colors import Color, HexColor
+from reportlab.lib.colors import HexColor
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
-# ========== ШРИФТЫ ==========
 FONT_REGULAR = "Receipt17Sans"
 FONT_BOLD = "Receipt17Sans-Bold"
 FONT_RUBLE = "Receipt17Ruble"
 FONT_RUBLE_BOLD = "Receipt17Ruble-Bold"
 FONT_FALLBACK = "Receipt17Fallback"
+
 ASSET_DIR = Path(__file__).parent / "assets"
 FONT_DIR = ASSET_DIR / "fonts"
 RECEIPT17_ASSET_DIR = ASSET_DIR / "receipt17"
 LOGO_PATH = RECEIPT17_ASSET_DIR / "logo.png"
 STAMP_PATH = RECEIPT17_ASSET_DIR / "stamp.png"
 
-_FONT_CANDIDATES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    (FONT_REGULAR, (str(FONT_DIR / "TinkoffSans-Regular.ttf"), "~/AppData/Local/Microsoft/Windows/Fonts/Roboto-Regular.ttf", "C:/Windows/Fonts/arial.ttf", "/usr/share/fonts/truetype/roboto/Roboto-Regular.ttf")),
-    (FONT_BOLD, (str(FONT_DIR / "TinkoffSans-Medium.ttf"), "~/AppData/Local/Microsoft/Windows/Fonts/Roboto-Bold.ttf", "C:/Windows/Fonts/arialbd.ttf", "/usr/share/fonts/truetype/roboto/Roboto-Bold.ttf")),
-    (FONT_RUBLE, (str(FONT_DIR / "ALSRubl.ttf"), str(FONT_DIR / "TinkoffSans-Regular.ttf"), "C:/Windows/Fonts/arial.ttf")),
-    (FONT_RUBLE_BOLD, (str(FONT_DIR / "ALSRubl.ttf"), str(FONT_DIR / "TinkoffSans-Medium.ttf"), "C:/Windows/Fonts/arialbd.ttf")),
-    (FONT_FALLBACK, (str(FONT_DIR / "DejaVuSans.ttf"), "C:/Windows/Fonts/segoeui.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")),
-)
+_FONT_CANDIDATES = {
+    FONT_REGULAR: [FONT_DIR / "TinkoffSans-Regular.ttf", Path("~/AppData/Local/Microsoft/Windows/Fonts/Roboto-Regular.ttf").expanduser(), Path("C:/Windows/Fonts/arial.ttf")],
+    FONT_BOLD: [FONT_DIR / "TinkoffSans-Medium.ttf", Path("~/AppData/Local/Microsoft/Windows/Fonts/Roboto-Bold.ttf").expanduser(), Path("C:/Windows/Fonts/arialbd.ttf")],
+    FONT_RUBLE: [FONT_DIR / "ALSRubl.ttf", FONT_DIR / "TinkoffSans-Regular.ttf", Path("C:/Windows/Fonts/arial.ttf")],
+    FONT_RUBLE_BOLD: [FONT_DIR / "ALSRubl.ttf", FONT_DIR / "TinkoffSans-Medium.ttf", Path("C:/Windows/Fonts/arialbd.ttf")],
+    FONT_FALLBACK: [FONT_DIR / "DejaVuSans.ttf", Path("C:/Windows/Fonts/segoeui.ttf")],
+}
 
 _fonts_registered = False
 
@@ -41,36 +41,27 @@ def _ensure_fonts_registered() -> None:
     global _fonts_registered
     if _fonts_registered:
         return
-    for name, candidates in _FONT_CANDIDATES:
+    for logical_name, candidates in _FONT_CANDIDATES.items():
         for path in candidates:
-            candidate = Path(path).expanduser()
-            if candidate.exists():
-                pdfmetrics.registerFont(TTFont(name, str(candidate)))
+            if not path.exists():
+                continue
+            try:
+                pdfmetrics.registerFont(TTFont(logical_name, str(path)))
                 break
-        else:
-            raise RuntimeError(f"Font {name} not found.")
+            except Exception:
+                continue
     _fonts_registered = True
 
-def _font_supports_text(font_name: str, text: str) -> bool:
-    font = pdfmetrics.getFont(font_name)
-    char_to_glyph = getattr(font.face, "charToGlyph", {})
-    return all(ord(char) in char_to_glyph for char in text)
-
-def _font_for_char(preferred_font: str, char: str) -> str:
-    if _font_supports_text(preferred_font, char):
-        return preferred_font
-    return FONT_FALLBACK
-
-def _mixed_text_width(c: canvas.Canvas, text: str, font_name: str, size: float) -> float:
-    return sum(c.stringWidth(char, _font_for_char(font_name, char), size) for char in text)
+def _get_font(logical_name: str) -> str:
+    if logical_name in pdfmetrics._fonts:
+        return logical_name
+    if logical_name in (FONT_BOLD, FONT_RUBLE_BOLD):
+        return "Helvetica-Bold"
+    return "Helvetica"
 
 def _draw_text(c: canvas.Canvas, x: float, y: float, text: str, font_name: str, size: float) -> None:
-    cursor_x = x
-    for char in text:
-        char_font = _font_for_char(font_name, char)
-        c.setFont(char_font, size)
-        c.drawString(cursor_x, y, char)
-        cursor_x += c.stringWidth(char, char_font, size)
+    c.setFont(_get_font(font_name), size)
+    c.drawString(x, y, text)
 
 @dataclass(slots=True)
 class Receipt17CardData:
@@ -89,78 +80,74 @@ class Receipt17CardData:
     support_email: str = "fb@tbank.ru"
     note_text: str = "По вопросам зачисления обращайтесь к получателю"
 
-# ========== РАЗМЕРЫ СТРАНИЦЫ ==========
 PAGE_WIDTH = 270.0
 PAGE_HEIGHT = 471.0
 
-# ========== КООРДИНАТЫ (Слева, Сверху от верхнего края) – скорректированы на -10.368 ==========
+# Координаты (после всех сдвигов)
 LOGO_LEFT = 121.0
-LOGO_TOP = 28.0                # не меняется (не текст)
+LOGO_TOP = 28.0
 LOGO_WIDTH = 28.0
 LOGO_HEIGHT = 28.0
 
-DATE_LEFT = 20.648
-DATE_TOP = 81.100 - 10.368      # 70.732
+DATE_LEFT = 22.592
+DATE_TOP = 86.38
 
-TOTAL_LABEL_LEFT = 21.240       # новое значение из примера
-TOTAL_LABEL_TOP = 96.082 - 10.368  # 85.714
+# Итого: было 23.48 + 4.48 = 27.96
+TOTAL_LABEL_LEFT = 27.96
+TOTAL_LABEL_TOP = 106.45
 
-TOTAL_AMOUNT_RIGHT_X = 249.0    # правый край (не меняем)
-TOTAL_AMOUNT_TOP = 95.842 - 10.368   # 85.474
+TOTAL_AMOUNT_RIGHT_X = 249.0
+TOTAL_AMOUNT_TOP = 95.842
 
 TOP_LINE_LEFT = 18.0
-TOP_LINE_TOP = 120.5 - 10.368        # 110.132
+TOP_LINE_TOP = 120.5
 TOP_LINE_WIDTH = 232.0
 
-FIELDS = [  # (label, label_left, label_top, field, value_left, value_top)
-    ("Перевод", 20.783, 136.298 - 10.368, "transfer_type", 186.833, 136.298 - 10.368),
-    ("Статус", 20.432, 156.217 - 10.368, "status", 216.777, 156.298 - 10.368),
-    ("Комиссия", 20.783, 197.298 - 10.368, "fee", 198.883, 197.298 - 10.368),
-    ("Отправитель", 20.432, 217.217 - 10.368, "sender_name", 183.665, 217.298 - 10.368),
-    ("Карта получателя", 20.783, 237.298 - 10.368, "recipient_card", 181.447, 237.082 - 10.368),
-    ("Получатель", 20.783, 257.298 - 10.368, "recipient_name", 219.063, 257.298 - 10.368),
-    ("Банк получателя", 20.783, 277.298 - 10.368, "recipient_bank", 214.152, 276.569 - 10.368),
+FIELDS = [
+    ("Перевод", 20.783, 136.298, "transfer_type", 186.833, 136.298),
+    ("Статус", 20.432, 156.217, "status", 216.777, 156.298),
+    ("Комиссия", 20.783, 197.298, "fee", 198.883, 197.298),
+    ("Отправитель", 20.432, 217.217, "sender_name", 183.665, 217.298),
+    ("Карта получателя", 20.783, 237.298, "recipient_card", 181.447, 237.082),
+    ("Получатель", 20.783, 257.298, "recipient_name", 219.063, 257.298),
+    ("Банк получателя", 20.783, 277.298, "recipient_bank", 214.152, 276.569),
 ]
 
 SUM_LABEL_LEFT = 20.432
-SUM_LABEL_TOP = 176.217 - 10.368       # 165.849
+SUM_LABEL_TOP = 176.217
 SUM_VALUE_RIGHT_X = 249.0
-SUM_VALUE_TOP = 176.217 - 10.368       # 165.849
+SUM_VALUE_TOP = 176.217
 SUM_VALUE_SIZE = 9.0
 
-# Сумма (число и рубль отдельно уже не нужны, используем _draw_money_right)
-
 BOTTOM_LINE_LEFT = 19.0
-BOTTOM_LINE_TOP = 389.5 - 10.368       # 379.132
+BOTTOM_LINE_TOP = 389.5
 BOTTOM_LINE_WIDTH = 232.0
 
 RECEIPT_LEFT = 20.783
-RECEIPT_TOP = 406.150 - 10.368         # 395.782
+RECEIPT_TOP = 406.150
 RECEIPT_SIZE = 9.0
 
 NOTE_LEFT = 20.783
-NOTE_TOP = 422.529 - 10.368            # 412.161
+NOTE_TOP = 422.529
 NOTE_SIZE = 9.0
 
 SUPPORT_LABEL_LEFT = 20.432
-SUPPORT_LABEL_TOP = 439.529 - 10.368   # 429.161
+SUPPORT_LABEL_TOP = 439.529
 SUPPORT_EMAIL_LEFT = 92.640
-SUPPORT_EMAIL_TOP = 437.180 - 10.368   # 426.812
+SUPPORT_EMAIL_TOP = 437.180
 SUPPORT_SIZE = 9.0
 
 STAMP_LEFT = 66.0
-STAMP_TOP = 304.0 - 10.368             # 293.632
+STAMP_TOP = 304.0
 STAMP_WIDTH = 175.0
 STAMP_HEIGHT = 63.23
 
-# Цвета
 COLOR_TEXT = HexColor("#333333")
 COLOR_MUTED = HexColor("#909090")
 COLOR_ACCENT = HexColor("#ffdd2d")
 COLOR_LINK = HexColor("#1771d6")
 COLOR_STAMP = HexColor("#126cba")
 
-# ========== ФУНКЦИИ РИСОВАНИЯ ==========
 def _draw_accent_line(c: canvas.Canvas, x: float, y: float, width: float) -> None:
     c.setStrokeColor(COLOR_ACCENT)
     c.setLineWidth(1.0)
@@ -171,7 +158,6 @@ def _draw_logo(c: canvas.Canvas) -> None:
         y = PAGE_HEIGHT - LOGO_TOP - LOGO_HEIGHT
         c.drawImage(str(LOGO_PATH), LOGO_LEFT, y, width=LOGO_WIDTH, height=LOGO_HEIGHT, preserveAspectRatio=True, mask='auto')
         return
-    # fallback
     c.saveState()
     c.setFillColor(COLOR_ACCENT)
     path = c.beginPath()
@@ -183,7 +169,7 @@ def _draw_logo(c: canvas.Canvas) -> None:
     path.close()
     c.drawPath(path, stroke=0, fill=1)
     c.setFillColor(HexColor("#111111"))
-    c.setFont(FONT_BOLD, 17.0)
+    c.setFont(_get_font(FONT_BOLD), 17.0)
     c.drawCentredString(135.0, PAGE_HEIGHT - 47.7, "D")
     c.restoreState()
 
@@ -194,42 +180,29 @@ def _draw_demo_stamp(c: canvas.Canvas) -> None:
         return
     c.saveState()
     c.setFillColor(COLOR_STAMP)
-    c.setFont(FONT_BOLD, 12)
+    c.setFont(_get_font(FONT_BOLD), 12)
     y_text = PAGE_HEIGHT - STAMP_TOP - 15
-    _draw_text(c, STAMP_LEFT, y_text, "ДЕМО-БАНК", FONT_BOLD, 12)
+    c.drawString(STAMP_LEFT, y_text, "ДЕМО-БАНК")
     c.restoreState()
 
 def _draw_money_right(c: canvas.Canvas, y: float, value: str, size: float, right_x: float, bold: bool = False) -> None:
     amount = value.strip().removesuffix("₽").rstrip()
-    ruble = "i"
-    amount_font = FONT_BOLD if bold else FONT_REGULAR
-    ruble_font = FONT_RUBLE_BOLD if bold else FONT_RUBLE
-    ruble_width = c.stringWidth(ruble, ruble_font, size)
-    amount_width = _mixed_text_width(c, amount, amount_font, size)
+    ruble = "₽"
+    font_name = FONT_BOLD if bold else FONT_REGULAR
+    font = _get_font(font_name)
+    ruble_width = c.stringWidth(ruble, font, size)
+    amount_width = c.stringWidth(amount, font, size)
     start_x = right_x - amount_width - ruble_width
     c.setFillColor(COLOR_TEXT)
-    _draw_text(c, start_x, y, amount, amount_font, size)
-    if bold:
-        c.saveState()
-        c.setFillColor(COLOR_TEXT)
-        c.setStrokeColor(COLOR_TEXT)
-        c.setLineWidth(size / 30.0)
-        text_obj = c.beginText(start_x + amount_width, y)
-        text_obj.setFont(ruble_font, size)
-        text_obj.setTextRenderMode(2)
-        text_obj.textOut(ruble)
-        c.drawText(text_obj)
-        c.restoreState()
-    else:
-        c.setFont(ruble_font, size)
-        c.drawString(start_x + amount_width, y, ruble)
+    c.setFont(font, size)
+    c.drawString(start_x, y, amount)
+    c.drawString(start_x + amount_width, y, ruble)
 
 def render_receipt_17_card_pdf(data: Receipt17CardData) -> bytes:
     _ensure_fonts_registered()
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=(PAGE_WIDTH, PAGE_HEIGHT))
     c.setTitle(f"receipt_card_{datetime.now().strftime('%d.%m.%Y')}.pdf")
-    c.setAuthor("receipt-pdf-bot")
 
     def y(top: float) -> float:
         return PAGE_HEIGHT - top
@@ -248,10 +221,8 @@ def render_receipt_17_card_pdf(data: Receipt17CardData) -> bytes:
     for label, lx, lt, field, vx, vt in FIELDS:
         c.setFillColor(COLOR_TEXT)
         _draw_text(c, lx, y(lt), label, FONT_REGULAR, 9.0)
-        value = getattr(data, field)
-        _draw_text(c, vx, y(vt), value, FONT_REGULAR, 9.0)
+        _draw_text(c, vx, y(vt), getattr(data, field), FONT_REGULAR, 9.0)
 
-    # Сумма
     c.setFillColor(COLOR_TEXT)
     _draw_text(c, SUM_LABEL_LEFT, y(SUM_LABEL_TOP), "Сумма", FONT_REGULAR, 9.0)
     _draw_money_right(c, y(SUM_VALUE_TOP), data.amount, SUM_VALUE_SIZE, SUM_VALUE_RIGHT_X, bold=False)
