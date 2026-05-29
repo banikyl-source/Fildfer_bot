@@ -1,18 +1,19 @@
-"""Template for Alfa-Bank SBP receipt – PyMuPDF direct insertion.
-Координаты (x, y) берутся из Master PDF Editor: x = Слева, y = Сверху.
+"""Template for Alfa-Bank SBP receipt – PyMuPDF direct text insertion.
+Шрифт: Tahoma (без суффикса Regular). Координаты: (Слева, Сверху).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-import fitz
+import fitz  # PyMuPDF
 
 ASSET_DIR = Path(__file__).parent / "assets"
 FONT_DIR = ASSET_DIR / "fonts"
 ALFA_ASSET_DIR = ASSET_DIR / "alfa"
 BLANK_TEMPLATE = ALFA_ASSET_DIR / "blank_alfa.pdf"
 
+# Путь к шрифту Tahoma
 FONT_PATH = FONT_DIR / "Tahoma.ttf"
 if not FONT_PATH.exists():
     FONT_PATH = None
@@ -31,7 +32,7 @@ class AlfaReceiptData:
     recipient_name: str = "Роман Павлович Б"
     transfer_message: str = "Перевод денежных средств"
 
-# Координаты (x, y) – как в Master PDF Editor: x = Слева, y = Сверху
+# Координаты (x, y) – как в Master PDF Editor: x = Слева, y = Сверху (верхний левый угол)
 RAW_COORDS = {
     "header_datetime": (453.998, 54.467),
     "transfer_datetime": (36.770, 254.364),
@@ -62,12 +63,16 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
         "producer": "АО «АЛЬФА-БАНК»"
     })
 
-    # Шрифт
+    # Регистрация шрифта Tahoma с именем "Tahoma"
+    fontname = "helv"  # fallback
     if FONT_PATH and FONT_PATH.exists():
-        page.insert_font(fontname="Tahoma", fontfile=str(FONT_PATH))
-        fontname = "Tahoma"
-    else:
-        fontname = "helv"
+        try:
+            # Встраиваем шрифт и явно задаём имя "Tahoma"
+            page.insert_font(fontname="Tahoma", fontfile=str(FONT_PATH))
+            fontname = "Tahoma"
+        except Exception as e:
+            print(f"Font loading error: {e}")
+            fontname = "helv"
 
     def add_text(x, y, text, fontsize, color=(0,0,0)):
         page.insert_text((x, y), text, fontsize=fontsize, fontname=fontname, color=color)
