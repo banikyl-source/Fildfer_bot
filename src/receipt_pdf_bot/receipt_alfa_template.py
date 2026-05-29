@@ -1,5 +1,5 @@
 """Template for Alfa-Bank SBP receipt – PyMuPDF direct text insertion.
-Координаты header_datetime скорректированы по требованию.
+Координаты amount скорректированы. Остальные поля без изменений.
 """
 
 from __future__ import annotations
@@ -33,9 +33,9 @@ class AlfaReceiptData:
 
 # Координаты (x, y) – как в Master PDF Editor (Слева, Сверху)
 RAW_COORDS = {
-    "header_datetime": (452.788, 62.75),      # исправлено
+    "header_datetime": (452.788, 62.75),        # исправлено ранее
     "transfer_datetime": (36.770, 254.364),
-    "amount": (36.086, 168.576),
+    "amount": (36.134, 177.612),               # исправлено: +0.048 по X, +9.036 по Y
     "fee": (35.942, 211.470),
     "recipient_phone": (305.326, 168.576),
     "recipient_bank": (304.750, 211.650),
@@ -96,4 +96,4 @@ if __name__ == "__main__":
     test_data = AlfaReceiptData()
     with open("alfa_corrected.pdf", "wb") as f:
         f.write(render_alfa_receipt_pdf(test_data))
-    print("✅ Готово, координаты header_datetime обновлены")
+    print("✅ Готово, координаты amount обновлены")
