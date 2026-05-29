@@ -1,19 +1,18 @@
 """Template for Alfa-Bank SBP receipt – PyMuPDF direct text insertion.
-Шрифт: Tahoma (без суффикса Regular). Координаты: (Слева, Сверху).
+Координаты header_datetime скорректированы по требованию.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-import fitz  # PyMuPDF
+import fitz
 
 ASSET_DIR = Path(__file__).parent / "assets"
 FONT_DIR = ASSET_DIR / "fonts"
 ALFA_ASSET_DIR = ASSET_DIR / "alfa"
 BLANK_TEMPLATE = ALFA_ASSET_DIR / "blank_alfa.pdf"
 
-# Путь к шрифту Tahoma
 FONT_PATH = FONT_DIR / "Tahoma.ttf"
 if not FONT_PATH.exists():
     FONT_PATH = None
@@ -32,9 +31,9 @@ class AlfaReceiptData:
     recipient_name: str = "Роман Павлович Б"
     transfer_message: str = "Перевод денежных средств"
 
-# Координаты (x, y) – как в Master PDF Editor: x = Слева, y = Сверху (верхний левый угол)
+# Координаты (x, y) – как в Master PDF Editor (Слева, Сверху)
 RAW_COORDS = {
-    "header_datetime": (453.998, 54.467),
+    "header_datetime": (452.788, 62.75),      # исправлено
     "transfer_datetime": (36.770, 254.364),
     "amount": (36.086, 168.576),
     "fee": (35.942, 211.470),
@@ -54,7 +53,6 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
     doc = fitz.open(BLANK_TEMPLATE)
     page = doc[0]
 
-    # Метаданные
     doc.set_metadata({
         "title": "Квитанция о переводе по СБП",
         "author": "АО «АЛЬФА-БАНК»",
@@ -63,16 +61,13 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
         "producer": "АО «АЛЬФА-БАНК»"
     })
 
-    # Регистрация шрифта Tahoma с именем "Tahoma"
-    fontname = "helv"  # fallback
+    fontname = "helv"
     if FONT_PATH and FONT_PATH.exists():
         try:
-            # Встраиваем шрифт и явно задаём имя "Tahoma"
             page.insert_font(fontname="Tahoma", fontfile=str(FONT_PATH))
             fontname = "Tahoma"
-        except Exception as e:
-            print(f"Font loading error: {e}")
-            fontname = "helv"
+        except Exception:
+            pass
 
     def add_text(x, y, text, fontsize, color=(0,0,0)):
         page.insert_text((x, y), text, fontsize=fontsize, fontname=fontname, color=color)
@@ -99,6 +94,6 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
 
 if __name__ == "__main__":
     test_data = AlfaReceiptData()
-    with open("alfa_fixed.pdf", "wb") as f:
+    with open("alfa_corrected.pdf", "wb") as f:
         f.write(render_alfa_receipt_pdf(test_data))
-    print("✅ Готово")
+    print("✅ Готово, координаты header_datetime обновлены")
