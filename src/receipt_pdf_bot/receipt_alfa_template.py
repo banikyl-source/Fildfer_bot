@@ -1,34 +1,23 @@
-"""Template for Alfa-Bank SBP receipt – все координаты сдвинуты вниз на 0.121 pt для компенсации высоты шрифта.
-Цвет даты в шапке #7e7e83.
+"""Template for Alfa-Bank SBP receipt – PyMuPDF direct text insertion.
+Шрифт Tahoma встраивается. Координаты пересчитаны из ваших замеров.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from io import BytesIO
 from pathlib import Path
-from datetime import datetime
-
-from reportlab.pdfgen import canvas
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.lib.colors import HexColor
-from pypdf import PdfReader, PdfWriter
+import fitz  # PyMuPDF
 
 ASSET_DIR = Path(__file__).parent / "assets"
 FONT_DIR = ASSET_DIR / "fonts"
 ALFA_ASSET_DIR = ASSET_DIR / "alfa"
 BLANK_TEMPLATE = ALFA_ASSET_DIR / "blank_alfa.pdf"
 
-FONT_NAME = "Tahoma"
-font_path = FONT_DIR / "Tahoma.ttf"
-if font_path.exists():
-    pdfmetrics.registerFont(TTFont(FONT_NAME, str(font_path)))
-else:
-    FONT_NAME = "Helvetica"
-
-COLOR_GRAY = HexColor("#7e7e83")
-COLOR_BLACK = HexColor("#000000")
+# Путь к шрифту Tahoma
+FONT_PATH = FONT_DIR / "Tahoma.ttf"
+if not FONT_PATH.exists():
+    # Fallback – попробуем системный Tahoma
+    FONT_PATH = None
 
 @dataclass
 class AlfaReceiptData:
@@ -44,79 +33,91 @@ class AlfaReceiptData:
     recipient_name: str = "Роман Павлович Б"
     transfer_message: str = "Перевод денежных средств"
 
-# Координаты из последней калибровки, затем все y_top увеличены на 0.121
-SHIFT = 0.121
-
-COORDS_FROM_TOP = {
-    "amount": (35.45, 177.48 + SHIFT),
-    "fee": (35.45, 220.374 + SHIFT),
-    "recipient_phone": (304.75, 177.48 + SHIFT),
-    "recipient_bank": (304.75, 220.374 + SHIFT),
-    "sender_account": (304.75, 263.268 + SHIFT),
-    "operation_number": (35.45, 306.294 + SHIFT),
-    "sbp_id": (304.75, 306.162 + SHIFT),
-    "recipient_name": (35.45, 349.056 + SHIFT),
-    "transfer_message": (304.75, 349.056 + SHIFT),
+# Исходные координаты из Master PDF Editor (Слева, Сверху от верхнего края)
+# Без дополнительных сдвигов, которые мы вводили для ReportLab
+RAW_COORDS = {
+    "header_datetime": (453.998, 54.467),   # дата в шапке
+    "transfer_datetime": (36.770, 254.364), # дата перевода
+    "amount": (36.086, 168.576),
+    "fee": (35.942, 211.470),
+    "recipient_phone": (305.326, 168.576),
+    "recipient_bank": (304.750, 211.650),
+    "sender_account": (304.990, 254.340),
+    "operation_number": (35.834, 297.258),
+    "sbp_id": (304.702, 297.258),
+    "recipient_name": (36.338, 340.332),
+    "transfer_message": (305.638, 340.332),
 }
 
-HEADER_DATE_COORDS = (452.788, 62.629 + SHIFT)      # 62.75
-TRANSFER_DATE_COORDS = (35.45, 263.268 + SHIFT)     # 263.389
+# Высота страницы (из оригинала)
+PAGE_HEIGHT = 471.0
+
+def y_from_top(top: float) -> float:
+    """Преобразует координату 'Сверху' в координату от нижнего края."""
+    return PAGE_HEIGHT - top
 
 def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
     if not BLANK_TEMPLATE.exists():
         raise FileNotFoundError(f"Blank template not found: {BLANK_TEMPLATE}")
 
-    reader = PdfReader(BLANK_TEMPLATE)
-    page = reader.pages[0]
-    page_width = float(page.mediabox.width)
-    page_height = float(page.mediabox.height)
+    doc = fitz.open(BLANK_TEMPLATE)
+    page = doc[0]
 
-    packet = BytesIO()
-    c = canvas.Canvas(packet, pagesize=(page_width, page_height))
-
-    # Основные поля
-    c.setFont(FONT_NAME, 12)
-    c.setFillColor(COLOR_BLACK)
-    for field_name, (x_top, y_top) in COORDS_FROM_TOP.items():
-        value = getattr(data, field_name, "")
-        if value:
-            y_bottom = page_height - y_top
-            c.drawString(x_top, y_bottom, str(value))
-
-    # Дата в шапке
-    c.setFont(FONT_NAME, 11)
-    c.setFillColor(COLOR_GRAY)
-    x_top, y_top = HEADER_DATE_COORDS
-    y_bottom = page_height - y_top
-    c.drawString(x_top, y_bottom, data.header_datetime)
-
-    # Дата перевода
-    c.setFont(FONT_NAME, 12)
-    c.setFillColor(COLOR_BLACK)
-    x_top, y_top = TRANSFER_DATE_COORDS
-    y_bottom = page_height - y_top
-    c.drawString(x_top, y_bottom, data.transfer_datetime)
-
-    c.save()
-
-    overlay = PdfReader(packet)
-    page.merge_page(overlay.pages[0])
-
-    writer = PdfWriter()
-    writer.add_page(page)
-    writer.add_metadata({
-        '/Title': 'Квитанция о переводе по СБП',
-        '/Author': 'АО «АЛЬФА-БАНК»',
-        '/Subject': 'Перевод по СБП',
-        '/Creator': 'АО «АЛЬФА-БАНК»',
-        '/Producer': 'АО «АЛЬФА-БАНК»',
+    # Устанавливаем метаданные
+    doc.set_metadata({
+        "title": "Квитанция о переводе по СБП",
+        "author": "АО «АЛЬФА-БАНК»",
+        "subject": "Перевод по СБП",
+        "creator": "АО «АЛЬФА-БАНК»",
+        "producer": "АО «АЛЬФА-БАНК»"
     })
-    out = BytesIO()
-    writer.write(out)
-    return out.getvalue()
+
+    # Встраиваем шрифт Tahoma, если он есть
+    if FONT_PATH and FONT_PATH.exists():
+        # Регистрируем шрифт для страницы
+        font = page.insert_font(fontname="Tahoma", fontfile=str(FONT_PATH))
+        fontname = "Tahoma"
+    else:
+        fontname = "helv"  # стандартный Helvetica (не поддерживает кириллицу, но для латиницы пойдёт)
+
+    # Функция для добавления текста
+    def add_text(x_top, y_top, text, fontsize, color=(0,0,0)):
+        x = x_top
+        y = y_from_top(y_top)
+        page.insert_text(
+            (x, y),
+            text,
+            fontsize=fontsize,
+            fontname=fontname,
+            color=color,
+            render_mode=0,
+        )
+
+    # Основные поля (чёрные, 12pt)
+    for field, (x, y) in RAW_COORDS.items():
+        if field == "header_datetime":
+            continue
+        if field == "transfer_datetime":
+            continue
+        value = getattr(data, field, "")
+        if value:
+            add_text(x, y, str(value), 12, (0,0,0))
+
+    # Дата в шапке (серая, 11pt) – отдельно
+    x, y = RAW_COORDS["header_datetime"]
+    add_text(x, y, data.header_datetime, 11, (0.5, 0.5, 0.5))  # серый
+
+    # Дата перевода (чёрная, 12pt)
+    x, y = RAW_COORDS["transfer_datetime"]
+    add_text(x, y, data.transfer_datetime, 12, (0,0,0))
+
+    # Сохраняем в байты
+    out_bytes = doc.write()
+    doc.close()
+    return out_bytes
 
 if __name__ == "__main__":
     test_data = AlfaReceiptData()
-    with open("alfa_test.pdf", "wb") as f:
+    with open("alfa_test_pymupdf.pdf", "wb") as f:
         f.write(render_alfa_receipt_pdf(test_data))
-    print("✅ Сгенерирован alfa_test.pdf с компенсацией смещения")
+    print("✅ Чек создан: alfa_test_pymupdf.pdf")
