@@ -1,5 +1,5 @@
-"""Template for Alfa-Bank SBP receipt – ReportLab + post‑processing metadata cleanup.
-Координаты остаются теми, которые вы уже откалибровали.
+"""Template for Alfa-Bank SBP receipt – все координаты сдвинуты вниз на 0.121 pt для компенсации высоты шрифта.
+Цвет даты в шапке #7e7e83.
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ FONT_DIR = ASSET_DIR / "fonts"
 ALFA_ASSET_DIR = ASSET_DIR / "alfa"
 BLANK_TEMPLATE = ALFA_ASSET_DIR / "blank_alfa.pdf"
 
-# Загрузка шрифта Tahoma
 FONT_NAME = "Tahoma"
 font_path = FONT_DIR / "Tahoma.ttf"
 if font_path.exists():
@@ -45,21 +44,23 @@ class AlfaReceiptData:
     recipient_name: str = "Роман Павлович Б"
     transfer_message: str = "Перевод денежных средств"
 
-# Координаты (те самые, которые вы подогнали визуально)
+# Координаты из последней калибровки, затем все y_top увеличены на 0.121
+SHIFT = 0.121
+
 COORDS_FROM_TOP = {
-    "amount": (35.45, 177.48),
-    "fee": (35.45, 220.374),
-    "recipient_phone": (304.75, 177.48),
-    "recipient_bank": (304.75, 220.374),
-    "sender_account": (304.75, 263.268),
-    "operation_number": (35.45, 306.294),
-    "sbp_id": (304.75, 306.162),
-    "recipient_name": (35.45, 349.056),
-    "transfer_message": (304.75, 349.056),
+    "amount": (35.45, 177.48 + SHIFT),
+    "fee": (35.45, 220.374 + SHIFT),
+    "recipient_phone": (304.75, 177.48 + SHIFT),
+    "recipient_bank": (304.75, 220.374 + SHIFT),
+    "sender_account": (304.75, 263.268 + SHIFT),
+    "operation_number": (35.45, 306.294 + SHIFT),
+    "sbp_id": (304.75, 306.162 + SHIFT),
+    "recipient_name": (35.45, 349.056 + SHIFT),
+    "transfer_message": (304.75, 349.056 + SHIFT),
 }
 
-HEADER_DATE_COORDS = (452.788, 62.629)
-TRANSFER_DATE_COORDS = (35.45, 263.268)
+HEADER_DATE_COORDS = (452.788, 62.629 + SHIFT)      # 62.75
+TRANSFER_DATE_COORDS = (35.45, 263.268 + SHIFT)     # 263.389
 
 def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
     if not BLANK_TEMPLATE.exists():
@@ -70,11 +71,10 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
     page_width = float(page.mediabox.width)
     page_height = float(page.mediabox.height)
 
-    # Создаём слой с текстом через ReportLab
     packet = BytesIO()
     c = canvas.Canvas(packet, pagesize=(page_width, page_height))
 
-    # Рисуем все тексты
+    # Основные поля
     c.setFont(FONT_NAME, 12)
     c.setFillColor(COLOR_BLACK)
     for field_name, (x_top, y_top) in COORDS_FROM_TOP.items():
@@ -83,12 +83,14 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
             y_bottom = page_height - y_top
             c.drawString(x_top, y_bottom, str(value))
 
+    # Дата в шапке
     c.setFont(FONT_NAME, 11)
     c.setFillColor(COLOR_GRAY)
     x_top, y_top = HEADER_DATE_COORDS
     y_bottom = page_height - y_top
     c.drawString(x_top, y_bottom, data.header_datetime)
 
+    # Дата перевода
     c.setFont(FONT_NAME, 12)
     c.setFillColor(COLOR_BLACK)
     x_top, y_top = TRANSFER_DATE_COORDS
@@ -97,14 +99,11 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
 
     c.save()
 
-    # Накладываем слой на шаблон
     overlay = PdfReader(packet)
     page.merge_page(overlay.pages[0])
 
-    # ✨ КЛЮЧЕВОЙ МОМЕНТ: чистим метаданные от ReportLab
     writer = PdfWriter()
     writer.add_page(page)
-    # Заменяем метаданные на банковские
     writer.add_metadata({
         '/Title': 'Квитанция о переводе по СБП',
         '/Author': 'АО «АЛЬФА-БАНК»',
@@ -120,4 +119,4 @@ if __name__ == "__main__":
     test_data = AlfaReceiptData()
     with open("alfa_test.pdf", "wb") as f:
         f.write(render_alfa_receipt_pdf(test_data))
-    print("✅ Готово")
+    print("✅ Сгенерирован alfa_test.pdf с компенсацией смещения")
