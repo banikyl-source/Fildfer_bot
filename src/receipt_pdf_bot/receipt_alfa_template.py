@@ -1,5 +1,5 @@
 """Template for Alfa-Bank SBP receipt – PyMuPDF direct text insertion.
-Координаты amount скорректированы повторно.
+Финальные координаты после всех калибровок.
 """
 
 from __future__ import annotations
@@ -31,18 +31,19 @@ class AlfaReceiptData:
     recipient_name: str = "Роман Павлович Б"
     transfer_message: str = "Перевод денежных средств"
 
+# Координаты (x, y) – как в Master PDF Editor (Слева, Сверху)
 RAW_COORDS = {
     "header_datetime": (452.788, 62.75),
-    "transfer_datetime": (36.770, 254.364),
-    "amount": (35.45, 177.612),               # исправлено: X уменьшен на 0.684
-    "fee": (35.942, 211.470),
-    "recipient_phone": (305.326, 168.576),
-    "recipient_bank": (304.750, 211.650),
-    "sender_account": (304.990, 254.340),
-    "operation_number": (35.834, 297.258),
-    "sbp_id": (304.702, 297.258),
-    "recipient_name": (36.338, 340.332),
-    "transfer_message": (305.638, 340.332),
+    "transfer_datetime": (35.45, 263.40),
+    "amount": (35.45, 177.612),
+    "fee": (35.45, 220.506),
+    "recipient_phone": (305.098, 177.396),
+    "recipient_bank": (305.134, 220.062),
+    "sender_account": (304.75, 263.40),
+    "operation_number": (35.45, 306.294),
+    "sbp_id": (304.75, 306.294),
+    "recipient_name": (34.514, 349.188),
+    "transfer_message": (304.75, 349.188),
 }
 
 def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
@@ -71,6 +72,7 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
     def add_text(x, y, text, fontsize, color=(0,0,0)):
         page.insert_text((x, y), text, fontsize=fontsize, fontname=fontname, color=color)
 
+    # Основные поля (чёрные, 12pt)
     for field, (x, y) in RAW_COORDS.items():
         if field in ("header_datetime", "transfer_datetime"):
             continue
@@ -78,9 +80,11 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
         if value:
             add_text(x, y, str(value), 12, (0,0,0))
 
+    # Дата в шапке (серая, 11pt)
     x, y = RAW_COORDS["header_datetime"]
     add_text(x, y, data.header_datetime, 11, (0.5, 0.5, 0.5))
 
+    # Дата перевода (чёрная, 12pt)
     x, y = RAW_COORDS["transfer_datetime"]
     add_text(x, y, data.transfer_datetime, 12, (0,0,0))
 
@@ -92,4 +96,4 @@ if __name__ == "__main__":
     test_data = AlfaReceiptData()
     with open("alfa_corrected.pdf", "wb") as f:
         f.write(render_alfa_receipt_pdf(test_data))
-    print("✅ Готово, amount теперь (35.45, 177.612)")
+    print("✅ Готово, все координаты обновлены")
