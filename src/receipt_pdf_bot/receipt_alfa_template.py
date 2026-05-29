@@ -1,5 +1,5 @@
 """Template for Alfa-Bank SBP receipt – PyMuPDF direct text insertion.
-Координата header_datetime исправлена на (453.998, 54.467).
+Координаты header_datetime = (453.998, 54.467) – исправлено.
 """
 
 from __future__ import annotations
@@ -31,10 +31,9 @@ class AlfaReceiptData:
     recipient_name: str = "Роман Павлович Б"
     transfer_message: str = "Перевод денежных средств"
 
-# Координаты (Слева, Сверху) – используем ваши текущие значения для всех полей,
-# но header_datetime исправлен.
+# Координаты (Слева, Сверху) – исправлены только header_datetime
 RAW_COORDS = {
-    "header_datetime": (453.998, 54.467),   # исправлено (было 455.208, 408.250)
+    "header_datetime": (453.998, 54.467),   # <-- ИСПРАВЛЕНО
     "transfer_datetime": (36.770, 254.364),
     "amount": (36.086, 168.576),
     "fee": (35.942, 211.470),
@@ -86,11 +85,11 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
         if value:
             add_text(x, y, str(value), 12, (0,0,0))
 
-    # Дата в шапке (серая, 11pt)
+    # Дата в шапке
     x, y = RAW_COORDS["header_datetime"]
     add_text(x, y, data.header_datetime, 11, (0.5, 0.5, 0.5))
 
-    # Дата перевода (чёрная, 12pt)
+    # Дата перевода
     x, y = RAW_COORDS["transfer_datetime"]
     add_text(x, y, data.transfer_datetime, 12, (0,0,0))
 
@@ -102,4 +101,4 @@ if __name__ == "__main__":
     test_data = AlfaReceiptData()
     with open("alfa_test_pymupdf.pdf", "wb") as f:
         f.write(render_alfa_receipt_pdf(test_data))
-    print("✅ Чек создан")
+    print("✅ Чек создан. Координата header_datetime = (453.998, 54.467)")
