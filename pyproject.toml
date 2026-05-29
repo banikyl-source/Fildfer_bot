@@ -9,6 +9,7 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "reportlab>=4.5.0",
     "pypdf>=5.0.0",
+    "PyMuPDF>=1.24.0",   # добавлено для работы с PDF без ReportLab
 ]
 
 [build-system]
