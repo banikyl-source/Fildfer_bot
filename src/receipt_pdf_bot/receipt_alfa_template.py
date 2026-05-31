@@ -1,5 +1,5 @@
-"""Template for Alfa-Bank SBP receipt – финальная визуальная копия.
-Размер оптимизирован (subset шрифта, сжатие). Метаданные удалены.
+"""Template for Alfa-Bank SBP receipt – встраивание Tahoma из файла.
+Размер ~500-600 КБ, но чек визуально идеален.
 """
 
 from __future__ import annotations
@@ -13,10 +13,10 @@ ASSET_DIR = Path(__file__).parent / "assets"
 FONT_DIR = ASSET_DIR / "fonts"
 ALFA_ASSET_DIR = ASSET_DIR / "alfa"
 BLANK_TEMPLATE = ALFA_ASSET_DIR / "blank_alfa.pdf"
-
 FONT_PATH = FONT_DIR / "Tahoma.ttf"
+
 if not FONT_PATH.exists():
-    FONT_PATH = None
+    raise FileNotFoundError(f"Font Tahoma.ttf not found at {FONT_PATH}")
 
 @dataclass
 class AlfaReceiptData:
@@ -32,7 +32,7 @@ class AlfaReceiptData:
     recipient_name: str = "Роман Павлович Б"
     transfer_message: str = "Перевод денежных средств"
 
-# Финальные координаты (x, y) в pt от верхнего левого угла
+# Финальные координаты после калибровки
 RAW_COORDS = {
     "header_datetime": (452.788, 62.75),
     "transfer_datetime": (35.45, 263.40),
@@ -48,29 +48,17 @@ RAW_COORDS = {
 }
 
 def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
-    if not BLANK_TEMPLATE.exists():
-        raise FileNotFoundError(f"Template not found: {BLANK_TEMPLATE}")
-
     doc = fitz.open(BLANK_TEMPLATE)
     page = doc[0]
-
-    # Удалить все метаданные
     doc.set_metadata({})
 
-    # Регистрация шрифта (подмножество)
-    fontname = "helv"
-    if FONT_PATH and FONT_PATH.exists():
-        try:
-            # Встраиваем шрифт как подмножество (flags = 1)
-            page.insert_font(fontname="Tahoma", fontfile=str(FONT_PATH), flags=1)
-            fontname = "Tahoma"
-        except Exception:
-            pass
+    # Встраиваем шрифт Tahoma
+    page.insert_font(fontname="Tahoma", fontfile=str(FONT_PATH))
+    fontname = "Tahoma"
 
     def add_text(x, y, text, fontsize, color=(0,0,0)):
         page.insert_text((x, y), text, fontsize=fontsize, fontname=fontname, color=color)
 
-    # Основные поля (чёрные, 12pt)
     for field, (x, y) in RAW_COORDS.items():
         if field in ("header_datetime", "transfer_datetime"):
             continue
@@ -78,22 +66,13 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
         if value:
             add_text(x, y, str(value), 12, (0,0,0))
 
-    # Дата в шапке (серая, 11pt)
     x, y = RAW_COORDS["header_datetime"]
     add_text(x, y, data.header_datetime, 11, (0.5, 0.5, 0.5))
 
-    # Дата перевода (чёрная, 12pt)
     x, y = RAW_COORDS["transfer_datetime"]
     add_text(x, y, data.transfer_datetime, 12, (0,0,0))
 
-    # Сохраняем с максимальной компрессией
     out = io.BytesIO()
     doc.save(out, garbage=4, deflate=True, clean=True)
     doc.close()
     return out.getvalue()
-
-if __name__ == "__main__":
-    test_data = AlfaReceiptData()
-    with open("alfa_final.pdf", "wb") as f:
-        f.write(render_alfa_receipt_pdf(test_data))
-    print("✅ Чек создан")
