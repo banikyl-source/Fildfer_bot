@@ -1,11 +1,12 @@
-"""Template for Alfa-Bank SBP receipt – PyMuPDF direct text insertion.
-Финальные координаты после всех калибровок.
+"""Template for Alfa-Bank SBP receipt – финальная визуальная копия.
+Размер оптимизирован (subset шрифта, сжатие). Метаданные удалены.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import io
 import fitz
 
 ASSET_DIR = Path(__file__).parent / "assets"
@@ -31,40 +32,37 @@ class AlfaReceiptData:
     recipient_name: str = "Роман Павлович Б"
     transfer_message: str = "Перевод денежных средств"
 
-# Координаты (x, y) – как в Master PDF Editor (Слева, Сверху)
+# Финальные координаты (x, y) в pt от верхнего левого угла
 RAW_COORDS = {
     "header_datetime": (452.788, 62.75),
     "transfer_datetime": (35.45, 263.40),
     "amount": (35.45, 177.612),
     "fee": (35.45, 220.506),
-    "recipient_phone": (305.098, 177.396),
-    "recipient_bank": (305.134, 220.062),
+    "recipient_phone": (304.75, 177.612),
+    "recipient_bank": (304.75, 220.506),
     "sender_account": (304.75, 263.40),
     "operation_number": (35.45, 306.294),
     "sbp_id": (304.75, 306.294),
-    "recipient_name": (34.514, 349.188),
+    "recipient_name": (35.45, 349.188),
     "transfer_message": (304.75, 349.188),
 }
 
 def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
     if not BLANK_TEMPLATE.exists():
-        raise FileNotFoundError(f"Blank template not found: {BLANK_TEMPLATE}")
+        raise FileNotFoundError(f"Template not found: {BLANK_TEMPLATE}")
 
     doc = fitz.open(BLANK_TEMPLATE)
     page = doc[0]
 
-    doc.set_metadata({
-        "title": "Квитанция о переводе по СБП",
-        "author": "АО «АЛЬФА-БАНК»",
-        "subject": "Перевод по СБП",
-        "creator": "АО «АЛЬФА-БАНК»",
-        "producer": "АО «АЛЬФА-БАНК»"
-    })
+    # Удалить все метаданные
+    doc.set_metadata({})
 
+    # Регистрация шрифта (подмножество)
     fontname = "helv"
     if FONT_PATH and FONT_PATH.exists():
         try:
-            page.insert_font(fontname="Tahoma", fontfile=str(FONT_PATH))
+            # Встраиваем шрифт как подмножество (flags = 1)
+            page.insert_font(fontname="Tahoma", fontfile=str(FONT_PATH), flags=1)
             fontname = "Tahoma"
         except Exception:
             pass
@@ -88,12 +86,14 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
     x, y = RAW_COORDS["transfer_datetime"]
     add_text(x, y, data.transfer_datetime, 12, (0,0,0))
 
-    out = doc.write()
+    # Сохраняем с максимальной компрессией
+    out = io.BytesIO()
+    doc.save(out, garbage=4, deflate=True, clean=True)
     doc.close()
-    return out
+    return out.getvalue()
 
 if __name__ == "__main__":
     test_data = AlfaReceiptData()
-    with open("alfa_corrected.pdf", "wb") as f:
+    with open("alfa_final.pdf", "wb") as f:
         f.write(render_alfa_receipt_pdf(test_data))
-    print("✅ Готово, все координаты обновлены")
+    print("✅ Чек создан")
