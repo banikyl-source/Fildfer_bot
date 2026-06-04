@@ -1,5 +1,4 @@
-"""Template for Alfa-Bank – вставка суммы в готовый шаблон.
-Шаблон уже содержит все остальные поля (дата, получатель и т.д.).
+"""Template for Alfa-Bank – вставка суммы в готовый PDF-шаблон без увеличения веса.
 """
 
 from __future__ import annotations
@@ -13,11 +12,11 @@ ASSET_DIR = Path(__file__).parent / "assets"
 ALFA_ASSET_DIR = ASSET_DIR / "alfa"
 BLANK_TEMPLATE = ALFA_ASSET_DIR / "blank_alfa.pdf"
 
-# Координаты для вставки суммы (в pt от левого верхнего угла)
+# Координаты для вставки суммы (pt, от левого верхнего угла) – откалибруйте под свой шаблон
 SUM_X = 78.1
-SUM_Y = 317.5   # верхний край текста
+SUM_Y = 317.5
 FONT_SIZE = 12
-FONT_NAME = "Tahoma"
+FONT_NAME = "Helvetica"  # используем стандартный шрифт, не встраиваем
 
 @dataclass
 class AlfaReceiptData:
@@ -30,14 +29,9 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
     doc = fitz.open(BLANK_TEMPLATE)
     page = doc[0]
 
-    # Встраиваем шрифт Tahoma, если есть файл
-    font_path = ASSET_DIR / "fonts" / "Tahoma.ttf"
-    if font_path.exists():
-        page.insert_font(fontname=FONT_NAME, fontfile=str(font_path))
-
-    text_y = SUM_Y + 10
+    # Вставляем сумму (без встраивания шрифта)
     page.insert_text(
-        (SUM_X, text_y),
+        (SUM_X, SUM_Y + 10),   # небольшая поправка для базовой линии
         data.amount,
         fontsize=FONT_SIZE,
         fontname=FONT_NAME,
@@ -45,6 +39,15 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
         render_mode=0,
     )
 
+    # --- МАКСИМАЛЬНАЯ ОПТИМИЗАЦИЯ РАЗМЕРА ---
+    # 1. Удаляем все служебные метаданные
+    doc.scrub(metadata=True, xml_metadata=True)
+    # 2. Создаём поднаборы для всех шрифтов (обрезаем неиспользуемые символы)
+    doc.subset_fonts()
+    # 3. (Опционально) сжимаем изображения – закомментировано, т.к. может снизить качество логотипа
+    # doc.rewrite_images(dpi_target=72, quality=75)
+
+    # 4. Сохраняем с максимальным сжатием
     out = io.BytesIO()
     doc.save(out, garbage=4, deflate=True, clean=True)
     doc.close()
@@ -52,6 +55,6 @@ def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
 
 if __name__ == "__main__":
     test_data = AlfaReceiptData(amount="5 000 RUB")
-    with open("alfa_with_sum.pdf", "wb") as f:
+    with open("alfa_optimized.pdf", "wb") as f:
         f.write(render_alfa_receipt_pdf(test_data))
-    print("✅ Тестовый чек создан")
+    print("✅ Чек с оптимизацией создан")
