@@ -64,7 +64,7 @@ class FillReceipt(StatesGroup):
     auth_code = State()
     receipt_number = State()
     transfer_message = State()
-    # для Альфа-банка две отдельные даты
+    # для Альфа-банка (не используются, но оставим для совместимости)
     header_datetime = State()
     transfer_datetime = State()
 
@@ -93,7 +93,7 @@ _FIELD_BY_STATE = {
     FillReceipt.auth_code.state: "auth_code",
     FillReceipt.receipt_number.state: "receipt_number",
     FillReceipt.transfer_message.state: "transfer_message",
-    # для Альфа-банка
+    # для Альфа-банка (не используются, но оставим)
     FillReceipt.header_datetime.state: "header_datetime",
     FillReceipt.transfer_datetime.state: "transfer_datetime",
 }
@@ -142,34 +142,14 @@ _FIELD_ORDER_TBANK_CARD = (
     FillReceipt.receipt_number,
 )
 
-# Альфа-Банк (две даты: шапка и дата перевода)
+# Альфа-Банк – теперь только сумма
 _FIELD_ORDER_ALFA = (
-    FillReceipt.header_datetime,      # дата в шапке
-    FillReceipt.transfer_datetime,    # дата под "Дата и время перевода"
     FillReceipt.amount,
-    FillReceipt.fee,
-    FillReceipt.recipient_card,       # номер телефона получателя
-    FillReceipt.recipient_bank,
-    FillReceipt.sender_account,
-    FillReceipt.document_number,      # номер операции
-    FillReceipt.auth_code,            # идентификатор СБП
-    FillReceipt.recipient_name,
-    FillReceipt.transfer_message,
 )
 
-# Подсказки для Альфа-Банка
+# Подсказки для Альфа-Банка – только сумма
 _ALFA_PROMPTS = {
-    FillReceipt.header_datetime.state: "📅 Введите дату и время для шапки (пример: 14.05.2026 23:09 мск):",
-    FillReceipt.transfer_datetime.state: "📅 Введите дату и время перевода (пример: 19.11.2025 20:21:45 мск):",
-    FillReceipt.amount.state: "💰 Введите сумму перевода (пример: 26 200 RUR):",
-    FillReceipt.fee.state: "💸 Введите комиссию (пример: 0 RUR):",
-    FillReceipt.recipient_card.state: "📞 Введите номер телефона получателя (10 цифр без +):",
-    FillReceipt.recipient_bank.state: "🏦 Введите банк получателя (пример: Т-Банк):",
-    FillReceipt.sender_account.state: "💳 Введите счёт списания (пример: 40817810505905043078):",
-    FillReceipt.document_number.state: "🔢 Введите номер операции (пример: C421911251260019):",
-    FillReceipt.auth_code.state: "🆔 Введите идентификатор операции в СБП (длинный):",
-    FillReceipt.recipient_name.state: "👤 Введите ФИО получателя:",
-    FillReceipt.transfer_message.state: "✉️ Введите сообщение получателю (пример: Перевод денежных средств):",
+    FillReceipt.amount.state: "💰 Введите сумму перевода (пример: 5 000 RUB):",
 }
 
 # Общие подсказки для СберБанка и Т-банк (по телефону)
@@ -433,18 +413,9 @@ def _render_template_pdf(values: Dict[str, Any], template_id: str) -> tuple[byte
         )
         return render_receipt_17_card_pdf(receipt), f"receipt_card_{current_date}.pdf"
     elif template_id == TEMPLATE_ALFA:
+        # Теперь передаём только сумму, остальные поля будут взяты из шаблона
         alfa_data = AlfaReceiptData(
-            header_datetime=values.get("header_datetime") or "14.05.2026 23:09 мск",
-            transfer_datetime=values.get("transfer_datetime") or "19.11.2025 20:21:45 мск",
-            amount=values.get("amount") or "26 200 RUR",
-            recipient_phone=values.get("recipient_card") or "79273364000",
-            fee=values.get("fee") or "0 RUR",
-            recipient_bank=values.get("recipient_bank") or "Т-Банк",
-            sender_account=values.get("sender_account") or "40817810505905043078",
-            operation_number=values.get("document_number") or "C421911251260019",
-            sbp_id=values.get("auth_code") or "A5323172126061020000020011640104",
-            recipient_name=values.get("recipient_name") or "Роман Павлович Б",
-            transfer_message=values.get("transfer_message") or "Перевод денежных средств",
+            amount=values.get("amount") or "1 400 RUB",
         )
         return render_alfa_receipt_pdf(alfa_data), f"alfa_receipt_{current_date}.pdf"
     else:
