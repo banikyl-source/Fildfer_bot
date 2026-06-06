@@ -1,4 +1,4 @@
-"""Бинарная замена суммы в оригинальном PDF Альфа-банка (автоматический поиск)."""
+"""Бинарная замена суммы в оригинальном PDF (с обычными пробелами)."""
 
 from __future__ import annotations
 
@@ -19,28 +19,45 @@ def replace_pdf_sum(pdf_bytes: bytes, new_sum: str) -> bytes:
     Ищет в PDF байтовую последовательность, похожую на сумму (цифры, пробелы, RUR),
     и заменяет её на новую сумму той же длины.
     """
-    # Паттерн: одна или более цифр, разделённые пробелами или \xa0, затем RUR, затем пробел/\xa0
-    pattern = re.compile(rb'[\d\xa0 ]+RUR[\xa0 ]')
+    # Паттерн: цифры, разделённые пробелами (обычными), затем RUR
+    # Также допускаем неразрывные пробелы на всякий случай
+    pattern = re.compile(rb'\d+(?:[ \xa0]\d+)*[ \xa0]RUR[ \xa0]?')
     match = pattern.search(pdf_bytes)
     if not match:
+        # Пробуем искать просто "1 400 RUR"
+        fallback = b'1 400 RUR'
+        pos = pdf_bytes.find(fallback)
+        if pos != -1:
+            match = re.search(re.escape(fallback), pdf_bytes)
+    if not match:
+        # Выведем первые 500 байт для диагностики
+        print("Не удалось найти сумму. Первые 500 байт PDF:")
+        print(pdf_bytes[:500])
         raise ValueError("Не удалось найти сумму в PDF")
+    
     old_sum = match.group()
-    # Определяем тип пробелов в оригинале
-    if b'\xa0' in old_sum:
-        new_sum_bytes = new_sum.replace(' ', '\xa0').encode('latin-1')
-    else:
-        new_sum_bytes = new_sum.encode('latin-1')
-    # Добавляем завершающий пробел, если он был в оригинале
+    print(f"Найдена старая сумма: {old_sum!r}")  # для отладки
+    
+    # Нормализуем новую сумму: заменяем пробелы на такие же, как в старой
+    # Определяем, какой пробел используется в оригинале
+    space_char = b'\xa0' if b'\xa0' in old_sum else b' '
+    new_sum_bytes = new_sum.replace(' ', ' ').encode('latin-1')
+    # Заменяем пробелы в новой сумме на оригинальные
+    if space_char != b' ':
+        new_sum_bytes = new_sum_bytes.replace(b' ', space_char)
+    # Добавляем завершающий пробел/неразрывный пробел, если он был в оригинале
     if old_sum[-1:] in (b' ', b'\xa0'):
         new_sum_bytes += old_sum[-1:]
-    # Если длина не совпадает, выравниваем неразрывными пробелами (в конец)
+    # Выравниваем длину (добавляем или отрезаем пробелы в конце)
     diff = len(old_sum) - len(new_sum_bytes)
     if diff > 0:
-        new_sum_bytes += b'\xa0' * diff
+        new_sum_bytes += space_char * diff
     elif diff < 0:
         new_sum_bytes = new_sum_bytes[:diff]
+    
     # Заменяем
-    return pdf_bytes[:match.start()] + new_sum_bytes + pdf_bytes[match.end():]
+    new_pdf = pdf_bytes[:match.start()] + new_sum_bytes + pdf_bytes[match.end():]
+    return new_pdf
 
 def render_alfa_receipt_pdf(data: AlfaReceiptData) -> bytes:
     if not ORIGINAL_PDF.exists():
