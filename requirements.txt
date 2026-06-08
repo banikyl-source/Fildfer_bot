@@ -1,0 +1,9 @@
+aiogram>=3.28.2
+aiohttp-socks>=0.11.0
+python-dotenv>=1.2.2
+reportlab>=4.5.0
+pypdf>=5.0.0
+fonttools>=4.55.0
+PyMuPDF>=1.24.0
+pillow>=10.0.0
+img2pdf>=0.4.4
