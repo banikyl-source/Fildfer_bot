@@ -130,14 +130,14 @@ MONEY_FIELDS = frozenset({"amount", "commission"})
 COMPACT_TEXT_FIELDS = frozenset({
     "recipient_bank",
     "recipient_name",
-    "sender_card",
-    "recipient_card",
     "auth_code",
     "terminal_code",
     "operation_ref",
     "datetime_full",
     "datetime_header",
 })
+# Номера карт: длина hex должна совпадать с шаблоном (хвостовой NBSP).
+PADDED_CARD_FIELDS = frozenset({"sender_card", "recipient_card"})
 ANCHOR_TOLERANCE = 0.06
 
 TJ_AT_POS_RE = re.compile(
@@ -262,7 +262,8 @@ def format_commission_like(value: Any, template: str) -> str:
         frac_slots = [i for i in digit_slots if i > comma_at]
         if not frac_slots:
             return format_amount_like(rub, template)
-        int_text = str(rub).rjust(len(int_slots), "0" if template[0].isdigit() else " ")
+        pad = "\xa0" if "\xa0" in template else " "
+        int_text = str(rub).rjust(len(int_slots), pad)
         frac_text = f"{kop:02d}"[-len(frac_slots):].rjust(len(frac_slots), "0")
         result = list(template)
         for pos, ch in zip(int_slots, int_text):
@@ -383,6 +384,8 @@ def format_field_value(field_id: str, value: Any, template: str) -> str:
     """Форматирует значение поля под шаблон исходного текста."""
     if field_id == "recipient_name":
         return format_recipient_name(str(value), template)
+    if field_id in PADDED_CARD_FIELDS:
+        return format_text_like(str(value).strip(), template)
     if field_id in COMPACT_TEXT_FIELDS:
         text = str(value).strip()
         if field_id in ("datetime_full", "datetime_header") and "\xa0" in template:
@@ -1381,6 +1384,10 @@ DEFAULT_BOT_SQUASH = Path(r"C:\Users\Жопсик\Desktop\pdf58_squash.pdf")
 DEFAULT_BOT_PASS_TEMPLATE = Path(r"C:\Users\Жопсик\Desktop\test_patch.pdf")
 DEFAULT_CARD_INPUT = Path(r"C:\Users\Жопсик\Desktop\PDF Document.pdf")
 DEFAULT_CARD_FULLFONT = Path(r"C:\Users\Жопсик\Desktop\alfa_card_fullfont.pdf")
+# Оригинал карта→карта: subset 48 символов, FontFile2 ≈ 17584 байт.
+CARD_BOT_SAFE_FONT_MARKER = "MIYPCA"
+CARD_BOT_SAFE_CMAP_MAX = 52
+CARD_BOT_SAFE_FONT_FILE2_MAX = 18_000
 # Лимит для компактного squash-шаблона (~60 КБ). Bot-pass без подмены шрифта ~73 КБ.
 MAX_PDF_BYTES = 60 * 1024
 MAX_PDF_BYTES_BOT_PASS = 76 * 1024
@@ -1765,6 +1772,114 @@ def bot_safe_charset_report(unicode_to_cid: dict[str, str]) -> str:
     avail_up = "".join(c for c in upper if c in unicode_to_cid)
     avail_lo = "".join(c for c in lower if c in unicode_to_cid)
     return f"ЗАГЛ: {avail_up or '—'}; строчные: {avail_lo or '—'}"
+
+
+def card_font_file2_size(pdf_path: str | Path) -> int:
+    """Размер встроенного FontFile2 шрифта F1 (байт)."""
+    import pypdf
+
+    ff = (
+        pypdf.PdfReader(str(pdf_path))
+        .pages[0]["/Resources"]["/Font"]["/F1"]["/DescendantFonts"][0][
+            "/FontDescriptor"
+        ]["/FontFile2"]
+        .get_data()
+    )
+    return len(ff)
+
+
+def is_card_bot_safe_template(pdf_path: str | Path) -> bool:
+    """Шаблон карта→карта без расширенного subset (как PDF Document.pdf)."""
+    src = Path(pdf_path)
+    if not src.is_file():
+        return False
+    try:
+        if CARD_BOT_SAFE_FONT_MARKER not in pdf_base_font_name(src):
+            return False
+        if len(load_unicode_to_cid(src)) > CARD_BOT_SAFE_CMAP_MAX:
+            return False
+        if card_font_file2_size(src) > CARD_BOT_SAFE_FONT_FILE2_MAX:
+            return False
+    except Exception:
+        return False
+    return True
+
+
+def resolve_card_bot_pass_template(explicit: Path) -> Path:
+    """
+    Шаблон карта→карта для onlypdf_robot: оригинальный subset (~56 КБ).
+
+    fullfont (alfa_card_fullfont.pdf) даёт «чек не распознан» — бот сверяет
+    отпечаток встроенного шрифта с проходящими чеками.
+    """
+    if is_card_bot_safe_template(explicit):
+        return explicit
+    desktop = DEFAULT_CARD_INPUT.parent
+    for candidate in (
+        DEFAULT_CARD_INPUT,
+        desktop / "PROHOD_CARD_FIXED1.pdf",
+        explicit,
+    ):
+        if is_card_bot_safe_template(candidate):
+            return candidate
+    raise AmountPatchError(
+        f"Шаблон {explicit.name} не подходит для бота (расширенный subset шрифта).\n"
+        f"Используйте оригинал {DEFAULT_CARD_INPUT.name} (~56 КБ, 48 символов в CMap),\n"
+        "не alfa_card_fullfont.pdf.\n"
+        "Скопируйте PDF Document.pdf → PROHOD_CARD_FIXED1.pdf в templates/."
+    )
+
+
+def validate_card_bot_safe_patch(
+    pdf_path: str | Path, field_values: dict[str, Any]
+) -> None:
+    """
+    Проверяет патч карта→карта без расширения шрифта и с фиксированной длиной hex.
+    """
+    src = resolve_card_bot_pass_template(Path(pdf_path))
+    discovered = discover_fields(src, template="card")
+    cmap = load_unicode_to_cid(src)
+    needed: set[str] = set()
+    field_problems: list[str] = []
+    length_problems: list[str] = []
+
+    for field_id, value in field_values.items():
+        if field_id not in discovered:
+            continue
+        template = discovered[field_id].text
+        text = format_field_value(field_id, value, template)
+        needed.update(text)
+        missing_here = sorted(
+            {ch for ch in text if ch not in cmap and not ch.isspace()},
+            key=ord,
+        )
+        if missing_here:
+            label = FIELD_LABELS_CARD.get(field_id, field_id)
+            shown = ", ".join(repr(ch) for ch in missing_here)
+            field_problems.append(f"  • {label} ({field_id}): {shown} в {text!r}")
+        new_raw = encode_cid_text(text, cmap)
+        if len(new_raw) != len(discovered[field_id].raw):
+            label = FIELD_LABELS_CARD.get(field_id, field_id)
+            length_problems.append(
+                f"  • {label} ({field_id}): hex {len(discovered[field_id].raw)} "
+                f"→ {len(new_raw)} ({text!r})"
+            )
+
+    missing = chars_needing_font_extension(needed, cmap)
+    if missing:
+        shown = ", ".join(repr(ch) for ch in sorted(missing, key=ord))
+        details = "\n".join(field_problems) if field_problems else ""
+        raise AmountPatchError(
+            f"Карта→карта: в subset нет символов: {shown}.\n"
+            f"{details}\n"
+            f"{bot_safe_charset_report(cmap)}\n"
+            "Нельзя расширять шрифт — бот пишет «чек не распознан»."
+        )
+    if length_problems:
+        raise AmountPatchError(
+            "Карта→карта: длина поля изменится (ломает размер PDF и бота):\n"
+            + "\n".join(length_problems)
+        )
 
 
 def validate_bot_safe_patch(

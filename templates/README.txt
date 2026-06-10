@@ -1,10 +1,11 @@
 Шаблоны для чеков Альфа-Банка в Telegram-боте:
 
   PROHOD_FIXED1.pdf      — СБП (по номеру телефона)
-  PROHOD_CARD_FIXED1.pdf — карта на карту
+  PROHOD_CARD_FIXED1.pdf — карта на карту (копия PDF Document.pdf, ~56 КБ)
 
 Исходник карта→карта: PDF Document.pdf на рабочем столе.
-Fullfont-шаблон: alfa_card_fullfont.pdf (собирается patch_alfa_amount.py --build-template).
+Для бота нужен оригинальный subset (~48 символов в CMap), НЕ alfa_card_fullfont.pdf.
+Fullfont (alfa_card_fullfont.pdf) — только для локальных тестов, бот пишет «чек не распознан».
 
 Переопределить в .env на BotHost (если нужно):
 

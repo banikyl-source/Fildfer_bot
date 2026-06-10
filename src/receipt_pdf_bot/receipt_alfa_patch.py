@@ -216,7 +216,7 @@ def find_alfa_template() -> Path:
 
 
 def find_alfa_card_template() -> Path:
-    """Ищет fullfont-шаблон чека карта→карта."""
+    """Ищет bot-pass шаблон чека карта→карта (оригинальный subset, не fullfont)."""
     env = os.getenv("ALFA_CARD_TEMPLATE_PDF", "").strip()
     if env:
         path = Path(env)
@@ -224,19 +224,25 @@ def find_alfa_card_template() -> Path:
             return path
         raise FileNotFoundError(f"ALFA_CARD_TEMPLATE_PDF не найден: {path}")
 
+    from patch_alfa_amount import AmountPatchError, resolve_card_bot_pass_template
+
     preferred = (
         DEFAULT_ALFA_CARD_TEMPLATE,
         DESKTOP / "PROHOD_CARD_FIXED1.pdf",
-        DESKTOP / "alfa_card_fullfont.pdf",
         DESKTOP / "PDF Document.pdf",
     )
     for candidate in preferred:
         if candidate.is_file():
-            return candidate
+            try:
+                return resolve_card_bot_pass_template(candidate)
+            except AmountPatchError:
+                continue
 
     raise FileNotFoundError(
-        f"Не найден шаблон PROHOD_CARD_FIXED1.pdf.\n"
-        f"Положите файл в {BOT_TEMPLATES} или задайте ALFA_CARD_TEMPLATE_PDF в .env"
+        f"Не найден bot-pass шаблон карта→карта (PDF Document.pdf / PROHOD_CARD_FIXED1.pdf).\n"
+        f"Положите копию {DESKTOP / 'PDF Document.pdf'} в {BOT_TEMPLATES} "
+        "как PROHOD_CARD_FIXED1.pdf.\n"
+        "Не используйте alfa_card_fullfont.pdf — бот не распознаёт расширенный шрифт."
     )
 
 
@@ -252,10 +258,21 @@ def render_alfa_card_pdf(bot_values: dict[str, Any]) -> bytes:
 
 def _render_alfa_pdf(bot_values: dict[str, Any], *, card: bool) -> bytes:
     _ensure_checker_import()
-    from patch_alfa_amount import AmountPatchError, replace_fields_in_pdf
+    from patch_alfa_amount import (
+        AmountPatchError,
+        replace_fields_in_pdf,
+        resolve_card_bot_pass_template,
+        validate_card_bot_safe_patch,
+    )
 
     template = find_alfa_card_template() if card else find_alfa_template()
     patch_values = build_patch_values(bot_values, card=card)
+
+    if card:
+        template = resolve_card_bot_pass_template(template)
+        validate_card_bot_safe_patch(template, patch_values)
+
+    template_size = template.stat().st_size
 
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
         out_path = Path(tmp.name)
@@ -269,6 +286,11 @@ def _render_alfa_pdf(bot_values: dict[str, Any], *, card: bool) -> bytes:
             extend_font=False,
             template="card" if card else None,
         )
+        if card and out_path.stat().st_size != template_size:
+            raise AmountPatchError(
+                f"Размер PDF изменился ({template_size} → {out_path.stat().st_size} байт). "
+                "Бот не распознает чек — проверьте шаблон (нужен PDF Document.pdf, не fullfont)."
+            )
         return out_path.read_bytes()
     except AmountPatchError as exc:
         raise RuntimeError(str(exc)) from exc
