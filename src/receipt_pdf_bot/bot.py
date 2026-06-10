@@ -31,8 +31,10 @@ from receipt_pdf_bot.receipt_17_card_template import (
     render_receipt_17_card_pdf,
 )
 from receipt_pdf_bot.receipt_alfa_patch import (
+    load_alfa_card_defaults,
     load_alfa_defaults,
     render_alfa_botpass_pdf,
+    render_alfa_card_pdf,
 )
 
 logger = logging.getLogger(__name__)
@@ -119,10 +121,10 @@ TEXT_MENU_ALFA = (
     "🔴 <b>Альфа Банк</b>\n\n"
     "Выберите тип чека:"
 )
-TEXT_ALFA_SOON = (
+TEXT_ALFA_OTHER_SOON = (
     "🚧 <b>Скоро будет доступно</b>\n\n"
-    "Этот тип чека Альфа Банка ещё в разработке.\n"
-    "Пока доступен только <b>📱 По СБП</b>."
+    "Перевод «В другой банк» ещё в разработке.\n"
+    "Доступны <b>📱 По СБП</b> и <b>💳 С карты на карту</b>."
 )
 
 # ---------- ПОРЯДОК ПОЛЕЙ ДЛЯ КАЖДОГО ШАБЛОНА ----------
@@ -190,7 +192,7 @@ _FIELD_ORDER_TBANK_CARD = (
     FillReceipt.receipt_number,
 )
 
-# Альфа-Банк (patch_alfa_amount, bot-pass)
+# Альфа-Банк СБП (patch_alfa_amount, bot-pass)
 _FIELD_ORDER_ALFA = (
     FillReceipt.amount,
     FillReceipt.fee,
@@ -204,6 +206,31 @@ _FIELD_ORDER_ALFA = (
     FillReceipt.auth_code,
     FillReceipt.transfer_message,
 )
+
+# Альфа-Банк карта→карта
+_FIELD_ORDER_ALFA_CARD = (
+    FillReceipt.amount,
+    FillReceipt.fee,
+    FillReceipt.header_datetime,
+    FillReceipt.transfer_datetime,
+    FillReceipt.sender_account,
+    FillReceipt.recipient_card,
+    FillReceipt.auth_code,
+    FillReceipt.document_number,
+    FillReceipt.receipt_number,
+)
+
+_ALFA_CARD_FIELD_HINTS: dict[str, tuple[str, str]] = {
+    "amount": ("Сумма перевода (руб.)", "9243"),
+    "fee": ("Комиссия (руб., с копейками)", "0,00"),
+    "header_datetime": ("Дата в шапке", "06.06.2026 12:00 мск"),
+    "transfer_datetime": ("Дата и время перевода", "06.06.2026 12:00:00 мск"),
+    "sender_account": ("Карта отправителя", "220015******7714"),
+    "recipient_card": ("Карта получателя", "220070******0777"),
+    "auth_code": ("Код авторизации", "7KW6CM"),
+    "document_number": ("Код терминала", "193571"),
+    "receipt_number": ("Номер операции в банке", "Z091405260059714"),
+}
 
 _ALFA_FIELD_HINTS: dict[str, tuple[str, str]] = {
     "amount": ("Сумма перевода (руб.)", "9243"),
@@ -410,7 +437,9 @@ def _field_order_for_template(template_id: str):
         return _FIELD_ORDER_TBANK_PHONE
     if template_id == TEMPLATE_17_CARD:
         return _FIELD_ORDER_TBANK_CARD
-    if template_id in (TEMPLATE_ALFA, TEMPLATE_ALFA_CARD, TEMPLATE_ALFA_OTHER):
+    if template_id == TEMPLATE_ALFA_CARD:
+        return _FIELD_ORDER_ALFA_CARD
+    if template_id in (TEMPLATE_ALFA, TEMPLATE_ALFA_OTHER):
         return _FIELD_ORDER_ALFA
     return _FIELD_ORDER_CLASSIC
 
@@ -421,12 +450,14 @@ def _next_state_for_template(current_state: str, template_id: str) -> Optional[S
             return states[i + 1] if i + 1 < len(states) else None
     return None
 
-def _alfa_prompt_for_state(state: State) -> str:
+def _alfa_prompt_for_state(state: State, template_id: str) -> str:
     field_name = _FIELD_BY_STATE.get(state.state)
     if not field_name:
         return "Введите значение:"
-    defaults = load_alfa_defaults()
-    label, sample = _ALFA_FIELD_HINTS.get(field_name, ("Значение", ""))
+    card = template_id == TEMPLATE_ALFA_CARD
+    defaults = load_alfa_card_defaults() if card else load_alfa_defaults()
+    hints = _ALFA_CARD_FIELD_HINTS if card else _ALFA_FIELD_HINTS
+    label, sample = hints.get(field_name, ("Значение", ""))
     if field_name in ("amount", "fee") and field_name in defaults:
         sample = str(defaults.get("commission" if field_name == "fee" else "amount", sample))
     patch_key = {
@@ -435,16 +466,17 @@ def _alfa_prompt_for_state(state: State) -> str:
         "header_datetime": "datetime_header",
         "transfer_datetime": "datetime_full",
         "recipient_name": "recipient_name",
-        "recipient_card": "phone",
+        "recipient_card": "recipient_card" if card else "phone",
         "recipient_bank": "recipient_bank",
-        "sender_account": "account",
-        "document_number": "operation_id",
-        "auth_code": "sbp_ref",
+        "sender_account": "sender_card" if card else "account",
+        "document_number": "terminal_code" if card else "operation_id",
+        "auth_code": "auth_code" if card else "sbp_ref",
         "transfer_message": "purpose",
+        "receipt_number": "operation_ref",
     }.get(field_name, "")
     if patch_key and patch_key in defaults:
         sample = str(defaults[patch_key])
-    states = _FIELD_ORDER_ALFA
+    states = _field_order_for_template(template_id)
     step = next(i for i, s in enumerate(states, 1) if s.state == state.state)
     return (
         f"<b>Шаг {step}/{len(states)}.</b> {label}.\n"
@@ -455,7 +487,7 @@ def _alfa_prompt_for_state(state: State) -> str:
 
 def _prompt_for_state(state: State, template_id: str) -> str:
     if template_id in (TEMPLATE_ALFA, TEMPLATE_ALFA_CARD, TEMPLATE_ALFA_OTHER):
-        return _alfa_prompt_for_state(state)
+        return _alfa_prompt_for_state(state, template_id)
     if template_id == TEMPLATE_17_CARD:
         return _CARD_PROMPTS.get(state.state, "Введите значение:")
     if template_id == TEMPLATE_17_PHONE:
@@ -557,8 +589,11 @@ def _render_template_pdf(values: Dict[str, Any], template_id: str) -> tuple[byte
         )
         return render_receipt_17_card_pdf(receipt), f"receipt_card_{current_date}.pdf"
     elif _is_alfa_template(template_id):
-        if template_id != TEMPLATE_ALFA:
+        if template_id == TEMPLATE_ALFA_OTHER:
             raise RuntimeError("Этот тип чека Альфа Банка пока не реализован.")
+        if template_id == TEMPLATE_ALFA_CARD:
+            pdf_bytes = render_alfa_card_pdf(values)
+            return pdf_bytes, f"alfa_card_{current_date}.pdf"
         pdf_bytes = render_alfa_botpass_pdf(values)
         return pdf_bytes, f"alfa_receipt_{current_date}.pdf"
     else:
@@ -644,8 +679,12 @@ async def handle_text(message: Message, state: FSMContext):
         await _start_receipt_flow(message, state, TEMPLATE_ALFA)
         return
 
-    if text in (BTN_ALFA_CARD, BTN_ALFA_OTHER):
-        await message.answer(TEXT_ALFA_SOON, reply_markup=get_alfa_variants_keyboard())
+    if text == BTN_ALFA_CARD:
+        await _start_receipt_flow(message, state, TEMPLATE_ALFA_CARD)
+        return
+
+    if text == BTN_ALFA_OTHER:
+        await message.answer(TEXT_ALFA_OTHER_SOON, reply_markup=get_alfa_variants_keyboard())
         return
 
     if text == BTN_ADMIN and user_id == ADMIN_ID:

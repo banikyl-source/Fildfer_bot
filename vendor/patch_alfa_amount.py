@@ -67,9 +67,8 @@ class AmountPatchError(Exception):
 
 # Якоря полей чека Альфа-Банка (Y, X) в content stream
 # Координаты (Y, X) значений в content stream (не подписей полей).
-# Левая колонка x≈35.45 — сумма, комиссия, дата, ID, ФИО получателя.
-# Правая колонка x≈304.75 — телефон, банк, счёт, СБП-ref, назначение.
-FIELD_ANCHORS: dict[str, tuple[float, float]] = {
+# СБП: левая колонка x≈35.45 — сумма, комиссия, дата, ID, ФИО; правая — телефон, банк…
+FIELD_ANCHORS_SBP: dict[str, tuple[float, float]] = {
     "datetime_header": (779.15, 452.788),
     "amount": (664.288, 35.45),
     "commission": (621.394, 35.45),
@@ -83,7 +82,22 @@ FIELD_ANCHORS: dict[str, tuple[float, float]] = {
     "purpose": (492.712, 304.75),
 }
 
-FIELD_LABELS: dict[str, str] = {
+# Карта→карта: те же Y, другие поля (PDF Document.pdf).
+FIELD_ANCHORS_CARD: dict[str, tuple[float, float]] = {
+    "datetime_header": (779.15, 452.788),
+    "amount": (664.288, 35.45),
+    "commission": (621.394, 35.45),
+    "sender_card": (578.5, 35.45),
+    "recipient_card": (535.606, 35.45),
+    "datetime_full": (664.288, 304.75),
+    "auth_code": (621.394, 304.75),
+    "terminal_code": (578.5, 304.75),
+    "operation_ref": (535.606, 304.75),
+}
+
+FIELD_ANCHORS = FIELD_ANCHORS_SBP
+
+FIELD_LABELS_SBP: dict[str, str] = {
     "datetime_header": "Дата «Сформирована» (шапка)",
     "amount": "Сумма перевода",
     "commission": "Комиссия",
@@ -97,9 +111,33 @@ FIELD_LABELS: dict[str, str] = {
     "purpose": "Назначение / тип перевода",
 }
 
+FIELD_LABELS_CARD: dict[str, str] = {
+    "datetime_header": "Дата «Сформирована» (шапка)",
+    "amount": "Сумма перевода",
+    "commission": "Комиссия",
+    "sender_card": "Номер карты отправителя",
+    "recipient_card": "Номер карты получателя",
+    "datetime_full": "Дата и время перевода",
+    "auth_code": "Код авторизации",
+    "terminal_code": "Код терминала",
+    "operation_ref": "Номер операции в банке",
+}
+
+FIELD_LABELS = FIELD_LABELS_SBP
+
 MONEY_FIELDS = frozenset({"amount", "commission"})
 # Поля без добивки пробелами; hex в потоке может стать короче (variable-length patch).
-COMPACT_TEXT_FIELDS = frozenset({"recipient_bank", "recipient_name"})
+COMPACT_TEXT_FIELDS = frozenset({
+    "recipient_bank",
+    "recipient_name",
+    "sender_card",
+    "recipient_card",
+    "auth_code",
+    "terminal_code",
+    "operation_ref",
+    "datetime_full",
+    "datetime_header",
+})
 ANCHOR_TOLERANCE = 0.06
 
 TJ_AT_POS_RE = re.compile(
@@ -156,6 +194,85 @@ def amount_numeric_value(text: str) -> int:
     """«4 140» / «4\xa0140 RUR» / «4140» → 4140."""
     s = re.sub(r"(?i)RUR", "", text)
     return int(re.sub(r"[\s\xa0]+", "", s))
+
+
+def get_field_anchors(template: str) -> dict[str, tuple[float, float]]:
+    if template == "card":
+        return FIELD_ANCHORS_CARD
+    return FIELD_ANCHORS_SBP
+
+
+def get_field_labels(template: str) -> dict[str, str]:
+    if template == "card":
+        return FIELD_LABELS_CARD
+    return FIELD_LABELS_SBP
+
+
+def detect_receipt_template(pdf_path: str | Path) -> str:
+    """Определяет тип чека: sbp (СБП) или card (карта→карта)."""
+    src = Path(pdf_path)
+    cmap = load_unicode_to_cid(src)
+    data = src.read_bytes()
+    card_fields = discover_fields_in_bytes(data, cmap, FIELD_ANCHORS_CARD)
+    if "sender_card" in card_fields and "*" in card_fields["sender_card"].text:
+        return "card"
+    sbp_fields = discover_fields_in_bytes(data, cmap, FIELD_ANCHORS_SBP)
+    if "recipient_name" in sbp_fields or "purpose" in sbp_fields:
+        return "sbp"
+    if "phone" in sbp_fields and sbp_fields["phone"].text.strip().startswith("+"):
+        return "sbp"
+    return "card" if "sender_card" in card_fields else "sbp"
+
+
+def _parse_money_value(value: Any) -> tuple[int, int]:
+    """Возвращает (рубли, копейки) из int/float/str."""
+    if isinstance(value, int):
+        return value, 0
+    if isinstance(value, float):
+        rub = int(value)
+        kop = int(round((value - rub) * 100))
+        return rub, kop
+    text = str(value or "").strip().replace("\xa0", " ")
+    text = text.replace("RUR", "").replace("RUB", "").replace("₽", "").strip()
+    if not text:
+        return 0, 0
+    if "," in text:
+        left, right = text.split(",", 1)
+        rub = int(re.sub(r"\D", "", left) or "0")
+        kop = int((re.sub(r"\D", "", right) + "00")[:2])
+        return rub, kop
+    if "." in text:
+        left, right = text.split(".", 1)
+        rub = int(re.sub(r"\D", "", left) or "0")
+        kop = int((re.sub(r"\D", "", right) + "00")[:2])
+        return rub, kop
+    digits = re.sub(r"\D", "", text)
+    return int(digits or "0"), 0
+
+
+def format_commission_like(value: Any, template: str) -> str:
+    """Комиссия с копейками (шаблон вида «77,59 RUR »)."""
+    rub, kop = _parse_money_value(value)
+    digit_slots = [i for i, c in enumerate(template) if c.isdigit()]
+    if not digit_slots:
+        raise AmountPatchError(f"В шаблоне комиссии нет цифр: {template!r}")
+    if "," in template:
+        comma_at = template.index(",")
+        int_slots = [i for i in digit_slots if i < comma_at]
+        frac_slots = [i for i in digit_slots if i > comma_at]
+        if not frac_slots:
+            return format_amount_like(rub, template)
+        int_text = str(rub).rjust(len(int_slots), "0" if template[0].isdigit() else " ")
+        frac_text = f"{kop:02d}"[-len(frac_slots):].rjust(len(frac_slots), "0")
+        result = list(template)
+        for pos, ch in zip(int_slots, int_text):
+            result[pos] = ch
+        for pos, ch in zip(frac_slots, frac_text):
+            result[pos] = ch
+        return "".join(result)
+    if isinstance(value, (int, float)):
+        return format_amount_like(int(round(float(value))), template)
+    return format_text_like(str(value), template)
 
 
 def format_amount_like(amount: int, template: str) -> str:
@@ -267,7 +384,12 @@ def format_field_value(field_id: str, value: Any, template: str) -> str:
     if field_id == "recipient_name":
         return format_recipient_name(str(value), template)
     if field_id in COMPACT_TEXT_FIELDS:
-        return str(value).strip()
+        text = str(value).strip()
+        if field_id in ("datetime_full", "datetime_header") and "\xa0" in template:
+            text = text.replace(" ", "\xa0")
+        return text
+    if field_id == "commission" and "," in template:
+        return format_commission_like(value, template)
     if field_id in MONEY_FIELDS:
         if isinstance(value, str):
             digits = re.sub(r"[\s\xa0]+", "", value.replace("RUR", "").replace("rur", ""))
@@ -548,8 +670,13 @@ def _match_anchor(y: float, x: float, anchor_y: float, anchor_x: float) -> bool:
     return abs(y - anchor_y) <= ANCHOR_TOLERANCE and abs(x - anchor_x) <= ANCHOR_TOLERANCE
 
 
-def _classify_field(y: float, x: float) -> str | None:
-    for field_id, (ay, ax) in FIELD_ANCHORS.items():
+def _classify_field(
+    y: float,
+    x: float,
+    anchors: dict[str, tuple[float, float]] | None = None,
+) -> str | None:
+    field_anchors = anchors or FIELD_ANCHORS_SBP
+    for field_id, (ay, ax) in field_anchors.items():
         if _match_anchor(y, x, ay, ax):
             return field_id
     return None
@@ -558,6 +685,7 @@ def _classify_field(y: float, x: float) -> str | None:
 def discover_fields_in_bytes(
     data: bytes,
     unicode_to_cid: dict[str, str],
+    anchors: dict[str, tuple[float, float]] | None = None,
 ) -> dict[str, FieldMatch]:
     """Находит поля чека в уже загруженных байтах PDF."""
     cid_map_tuple = tuple(unicode_to_cid.items())
@@ -577,7 +705,7 @@ def discover_fields_in_bytes(
             if len(hex_str) < 8:
                 continue
 
-            field_id = _classify_field(y, x)
+            field_id = _classify_field(y, x, anchors)
             if field_id is None:
                 continue
 
@@ -599,13 +727,21 @@ def discover_fields_in_bytes(
     return fields
 
 
-def discover_fields(pdf_path: str | Path) -> dict[str, FieldMatch]:
+def discover_fields(
+    pdf_path: str | Path,
+    *,
+    template: str | None = None,
+) -> dict[str, FieldMatch]:
     """Находит все редактируемые поля чека по координатам в PDF."""
     src = Path(pdf_path)
     if not src.is_file():
         raise AmountPatchError(f"Файл не найден: {src}")
 
-    return discover_fields_in_bytes(src.read_bytes(), load_unicode_to_cid(src))
+    receipt_template = template or detect_receipt_template(src)
+    anchors = get_field_anchors(receipt_template)
+    return discover_fields_in_bytes(
+        src.read_bytes(), load_unicode_to_cid(src), anchors
+    )
 
 
 def find_cid_amount_match(pdf_path: Path, data: bytes) -> AmountMatch:
@@ -900,18 +1036,22 @@ def show_charset_report(pdf_path: Path, *, extended: bool = False) -> None:
     )
 
 
-def list_fields_report(pdf_path: Path) -> None:
+def list_fields_report(pdf_path: Path, *, template: str | None = None) -> None:
     """Печатает все поля чека и их текущие значения."""
-    fields = discover_fields(pdf_path)
+    receipt_template = template or detect_receipt_template(pdf_path)
+    fields = discover_fields(pdf_path, template=receipt_template)
     if not fields:
         print("Поля не найдены (возможно, не CID-чек).")
         return
-    print(f"Поля в {pdf_path.name}:\n")
-    for field_id in FIELD_ANCHORS:
+    kind = "карта на карту" if receipt_template == "card" else "СБП"
+    print(f"Поля в {pdf_path.name} ({kind}):\n")
+    labels = get_field_labels(receipt_template)
+    anchors = get_field_anchors(receipt_template)
+    for field_id in anchors:
         if field_id not in fields:
             continue
         fm = fields[field_id]
-        label = FIELD_LABELS.get(field_id, field_id)
+        label = labels.get(field_id, field_id)
         print(f"  --{field_id.replace('_', '-')}")
         print(f"      {label}")
         print(f"      сейчас: {_display_text(fm.text)!r}")
@@ -931,6 +1071,7 @@ def replace_fields_in_pdf(
     verify: bool = True,
     extend_font: bool = True,
     compact_font_donor: Path | None = None,
+    template: str | None = None,
 ) -> dict:
     """
     Заменяет одно или несколько полей чека.
@@ -945,7 +1086,8 @@ def replace_fields_in_pdf(
     if not src.is_file():
         raise AmountPatchError(f"Файл не найден: {src}")
 
-    discovered = discover_fields(src)
+    receipt_template = template or detect_receipt_template(src)
+    discovered = discover_fields(src, template=receipt_template)
     if not discovered:
         if set(field_values.keys()) == {"amount"}:
             return _replace_utf16be_amount(
@@ -959,7 +1101,7 @@ def replace_fields_in_pdf(
     if missing:
         known = ", ".join(sorted(discovered))
         raise AmountPatchError(
-            f"Поле(я) не найдены в PDF: {', '.join(missing)}\n"
+            f"Поле(я) не найдены в PDF ({receipt_template}): {', '.join(missing)}\n"
             f"Доступные поля: {known}\n"
             "Подсказка: python patch_alfa_amount.py файл.pdf --list-fields"
         )
@@ -1237,6 +1379,8 @@ DEFAULT_BOT_SAFE_FULLFONT = Path(r"C:\Users\Жопсик\Desktop\pdf58_fullfont.
 DEFAULT_BOT_SQUASH = Path(r"C:\Users\Жопсик\Desktop\pdf58_squash.pdf")
 # Шаблон, который проходит onlypdf_robot: ~73 КБ, hinting сохранён, У→CID 008A (как lauchj.pdf).
 DEFAULT_BOT_PASS_TEMPLATE = Path(r"C:\Users\Жопсик\Desktop\test_patch.pdf")
+DEFAULT_CARD_INPUT = Path(r"C:\Users\Жопсик\Desktop\PDF Document.pdf")
+DEFAULT_CARD_FULLFONT = Path(r"C:\Users\Жопсик\Desktop\alfa_card_fullfont.pdf")
 # Лимит для компактного squash-шаблона (~60 КБ). Bot-pass без подмены шрифта ~73 КБ.
 MAX_PDF_BYTES = 60 * 1024
 MAX_PDF_BYTES_BOT_PASS = 76 * 1024
@@ -1298,6 +1442,7 @@ def _fullfont_for_template(template: Path) -> Path | None:
     resolved = {
         DEFAULT_INPUT.resolve(): DEFAULT_ORIGINAL_FULLFONT,
         DEFAULT_BOT_SAFE_INPUT.resolve(): DEFAULT_BOT_SAFE_FULLFONT,
+        DEFAULT_CARD_INPUT.resolve(): DEFAULT_CARD_FULLFONT,
     }.get(template.resolve())
     if resolved and resolved.is_file():
         return resolved
@@ -1677,11 +1822,11 @@ def validate_bot_safe_patch(
 # CLI
 # ---------------------------------------------------------------------------
 
-def _collect_field_args(args: argparse.Namespace) -> dict[str, Any]:
+def _collect_field_args(args: argparse.Namespace, template: str) -> dict[str, Any]:
     values: dict[str, Any] = {}
     if args.amount is not None:
         values["amount"] = args.amount
-    for field_id in FIELD_ANCHORS:
+    for field_id in get_field_anchors(template):
         if field_id == "amount":
             continue
         val = getattr(args, field_id, None)
@@ -1817,8 +1962,16 @@ def main() -> int:
         type=Path,
         help="JSON-файл с полями: {\"amount\": 5294, \"commission\": 0, ...}",
     )
+    parser.add_argument(
+        "--template",
+        choices=("auto", "sbp", "card"),
+        default="auto",
+        help="Тип чека: СБП (sbp), карта→карта (card) или авто (auto)",
+    )
 
-    for field_id, label in FIELD_LABELS.items():
+    all_field_labels = dict(FIELD_LABELS_SBP)
+    all_field_labels.update(FIELD_LABELS_CARD)
+    for field_id, label in all_field_labels.items():
         if field_id == "amount":
             continue
         arg = f"--{field_id.replace('_', '-')}"
@@ -1833,7 +1986,8 @@ def main() -> int:
 
     try:
         if args.list_fields:
-            list_fields_report(args.input)
+            tpl = None if args.template == "auto" else args.template
+            list_fields_report(args.input, template=tpl)
             return 0
 
         if args.show_charset:
@@ -1875,7 +2029,7 @@ def main() -> int:
 
         if args.build_template:
             built: list[Path] = []
-            for src in (DEFAULT_INPUT, DEFAULT_BOT_SAFE_INPUT):
+            for src in (DEFAULT_INPUT, DEFAULT_BOT_SAFE_INPUT, DEFAULT_CARD_INPUT):
                 if not src.is_file():
                     continue
                 if src == DEFAULT_BOT_SAFE_INPUT:
@@ -1924,11 +2078,21 @@ def main() -> int:
             extend_font
             and not args.no_fullfont
             and args.input.resolve()
-            in (DEFAULT_INPUT.resolve(), DEFAULT_BOT_SAFE_INPUT.resolve())
+            in (
+                DEFAULT_INPUT.resolve(),
+                DEFAULT_BOT_SAFE_INPUT.resolve(),
+                DEFAULT_CARD_INPUT.resolve(),
+            )
         ):
             args.input = resolve_fullfont_input(args.input)
 
-        field_values = _collect_field_args(args)
+        receipt_template = (
+            detect_receipt_template(args.input)
+            if args.template == "auto"
+            else args.template
+        )
+
+        field_values = _collect_field_args(args, receipt_template)
         if args.fields_json:
             if not args.fields_json.is_file():
                 raise AmountPatchError(f"JSON не найден: {args.fields_json}")
@@ -1956,7 +2120,7 @@ def main() -> int:
         elif args.bot_safe:
             validate_bot_safe_patch(args.input, field_values)
 
-        discovered = discover_fields(args.input)
+        discovered = discover_fields(args.input, template=receipt_template)
         if not discovered and "amount" in field_values and len(field_values) == 1:
             data = args.input.read_bytes()
             match = find_best_amount_match(data, args.input)
@@ -1999,7 +2163,7 @@ def main() -> int:
 
         for field_id, fm, new_text in prepared_preview:
             new_raw = encode_cid_text(new_text, cmap)
-            label = FIELD_LABELS.get(field_id, field_id)
+            label = get_field_labels(receipt_template).get(field_id, field_id)
             print(f"\n  [{field_id}] {label}")
             print(f"    было:  {_display_text(fm.text)!r}")
             print(f"    станет: {_display_text(new_text)!r}")
@@ -2015,6 +2179,7 @@ def main() -> int:
             args.output,
             verify=not args.no_verify,
             extend_font=extend_font,
+            template=receipt_template,
         )
         mode = info["patch_mode"]
         extra = ""

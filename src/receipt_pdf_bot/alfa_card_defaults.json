@@ -1,0 +1,11 @@
+{
+  "amount": 9243,
+  "commission": "0,00",
+  "datetime_header": "06.06.2026 12:00 мск",
+  "datetime_full": "06.06.2026 12:00:00 мск",
+  "sender_card": "220015******7714",
+  "recipient_card": "220070******0777",
+  "auth_code": "7KW6CM",
+  "terminal_code": "193571",
+  "operation_ref": "Z091405260059714"
+}
