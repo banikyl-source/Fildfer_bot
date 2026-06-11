@@ -260,6 +260,9 @@ def _render_alfa_pdf(bot_values: dict[str, Any], *, card: bool) -> bytes:
     _ensure_checker_import()
     from patch_alfa_amount import (
         AmountPatchError,
+        load_unicode_to_cid,
+        missing_receipt_digits,
+        repair_card_template_digits,
         replace_fields_in_pdf,
         resolve_card_bot_pass_template,
         validate_card_bot_safe_patch,
@@ -267,9 +270,14 @@ def _render_alfa_pdf(bot_values: dict[str, Any], *, card: bool) -> bytes:
 
     template = find_alfa_card_template() if card else find_alfa_template()
     patch_values = build_patch_values(bot_values, card=card)
+    prepared_template: Path | None = None
 
     if card:
         template = resolve_card_bot_pass_template(template)
+        if missing_receipt_digits(load_unicode_to_cid(template)):
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_tpl:
+                prepared_template = Path(tmp_tpl.name)
+            template = repair_card_template_digits(template, prepared_template)
         validate_card_bot_safe_patch(template, patch_values)
 
     template_size = template.stat().st_size
@@ -286,14 +294,23 @@ def _render_alfa_pdf(bot_values: dict[str, Any], *, card: bool) -> bytes:
             extend_font=False,
             template="card" if card else None,
         )
-        if card and out_path.stat().st_size != template_size:
-            raise AmountPatchError(
-                f"Размер PDF изменился ({template_size} → {out_path.stat().st_size} байт). "
-                "Бот не распознает чек — проверьте шаблон (нужен PDF Document.pdf, не fullfont)."
-            )
+        if card:
+            from font_extend import fit_pdf_to_target
+
+            out_data = bytearray(out_path.read_bytes())
+            fit_pdf_to_target(out_data, template_size)
+            out_path.write_bytes(out_data)
+            out_size = out_path.stat().st_size
+            if out_size != template_size and abs(out_size - template_size) > 2:
+                raise AmountPatchError(
+                    f"Размер PDF изменился ({template_size} → {out_size} байт). "
+                    "Бот не распознает чек — проверьте шаблон (нужен PDF Document.pdf, не fullfont)."
+                )
         return out_path.read_bytes()
     except AmountPatchError as exc:
         raise RuntimeError(str(exc)) from exc
     finally:
         if out_path.is_file():
             out_path.unlink(missing_ok=True)
+        if prepared_template is not None and prepared_template.is_file():
+            prepared_template.unlink(missing_ok=True)

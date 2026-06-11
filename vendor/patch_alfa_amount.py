@@ -1445,6 +1445,67 @@ def has_full_receipt_charset(unicode_to_cid: dict[str, str]) -> bool:
     return all(ch in unicode_to_cid for ch in full_template_charset(unicode_to_cid))
 
 
+RECEIPT_DIGITS = "0123456789"
+
+
+def missing_receipt_digits(unicode_to_cid: dict[str, str]) -> tuple[str, ...]:
+    """Цифры 0–9, отсутствующие в subset шаблона."""
+    return tuple(ch for ch in RECEIPT_DIGITS if ch not in unicode_to_cid)
+
+
+def has_all_receipt_digits(unicode_to_cid: dict[str, str]) -> bool:
+    return not missing_receipt_digits(unicode_to_cid)
+
+
+def repair_card_template_digits(
+    input_pdf: str | Path,
+    output_pdf: str | Path | None = None,
+) -> Path:
+    """
+    Добавляет в subset карта→карта недостающие цифры 0–9.
+
+    Оригинальный PDF Document.pdf не содержит «8» (в сумме шаблона её не было).
+    """
+    src = Path(input_pdf)
+    if not src.is_file():
+        raise AmountPatchError(f"Файл не найден: {src}")
+    cmap = load_unicode_to_cid(src)
+    missing = missing_receipt_digits(cmap)
+    if not missing:
+        return src
+
+    dst = Path(output_pdf) if output_pdf else src
+    data = bytearray(src.read_bytes())
+    original_size = len(data)
+    from font_extend import extend_font_compact_in_pdf_bytes, fit_pdf_to_target
+
+    result = extend_font_compact_in_pdf_bytes(data, src, chars=set(missing))
+    if not result.extended:
+        shown = ", ".join(repr(ch) for ch in missing)
+        raise AmountPatchError(
+            f"Не удалось добавить цифры в шаблон {src.name}: {shown}"
+        )
+    if output_pdf is None:
+        fit_pdf_to_target(data, original_size)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_bytes(data)
+
+    new_cmap = load_unicode_to_cid(dst)
+    still_missing = missing_receipt_digits(new_cmap)
+    if still_missing:
+        shown = ", ".join(repr(ch) for ch in still_missing)
+        raise AmountPatchError(
+            f"После починки {dst.name} всё ещё нет цифр: {shown}\n"
+            f"Доступно: {font_charset_report(new_cmap)}"
+        )
+    if not is_card_bot_safe_template(dst):
+        raise AmountPatchError(
+            f"Шаблон {dst.name} после добавления цифр не проходит bot-safe проверку "
+            f"(CMap {len(new_cmap)}, FontFile2 {card_font_file2_size(dst)} байт)."
+        )
+    return dst
+
+
 def _fullfont_for_template(template: Path) -> Path | None:
     resolved = {
         DEFAULT_INPUT.resolve(): DEFAULT_ORIGINAL_FULLFONT,
@@ -2073,6 +2134,14 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--fix-card-template",
+        action="store_true",
+        help=(
+            "Добавить недостающие цифры 0–9 в шаблон карта→карта "
+            "(PDF Document.pdf не содержит «8»)"
+        ),
+    )
+    parser.add_argument(
         "--fields-json",
         type=Path,
         help="JSON-файл с полями: {\"amount\": 5294, \"commission\": 0, ...}",
@@ -2174,6 +2243,18 @@ def main() -> int:
                 "  python patch_alfa_amount.py -o чек.pdf ...\n"
                 "  python patch_alfa_amount.py --bot-safe -o чек.pdf ..."
             )
+            return 0
+
+        if args.fix_card_template:
+            src = resolve_card_bot_pass_template(args.input)
+            dst = args.output or src.with_name(f"{src.stem}_digits_fixed{src.suffix}")
+            repaired = repair_card_template_digits(src, dst)
+            cmap = load_unicode_to_cid(repaired)
+            print(f"Шаблон карта→карта: {repaired}")
+            print(f"  шрифт: {pdf_base_font_name(repaired)}")
+            print(f"  размер: {repaired.stat().st_size} байт")
+            print(f"  цифры: {''.join(c for c in RECEIPT_DIGITS if c in cmap)}")
+            print(f"  символов в CMap: {len(cmap)}")
             return 0
 
         if sum(1 for f in (args.bot_pass, args.bot_squash, args.bot_safe) if f) > 1:
