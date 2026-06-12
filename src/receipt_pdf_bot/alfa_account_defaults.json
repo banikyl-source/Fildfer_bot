@@ -1,0 +1,19 @@
+{
+  "amount": 4901,
+  "commission": 0,
+  "datetime_full": "14.05.2026 17:25:21 мск ",
+  "operation_id": "C201405260050444",
+  "payment_order": "843382",
+  "payer_name": "Ульянов Никита Валерьевич",
+  "sender_account": "40817810305903378783",
+  "payer_bank": "АО \"АЛЬФА-БАНК\" г Москва",
+  "payer_bik": "044525593",
+  "payer_corr": "30101810200000000593",
+  "recipient_name": "Вольных Денис Сергеевич",
+  "recipient_inn": "7744000912",
+  "recipient_account": "40817810251043470664",
+  "recipient_bank": "ПАО \"Банк ПСБ\"",
+  "recipient_bik": "044525555",
+  "recipient_corr": "30101810400000000555",
+  "purpose": "Оплата заказа #3832638; Вольных Денис Сергеевич"
+}

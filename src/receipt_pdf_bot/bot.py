@@ -31,8 +31,10 @@ from receipt_pdf_bot.receipt_17_card_template import (
     render_receipt_17_card_pdf,
 )
 from receipt_pdf_bot.receipt_alfa_patch import (
+    load_alfa_account_defaults,
     load_alfa_card_defaults,
     load_alfa_defaults,
+    render_alfa_account_pdf,
     render_alfa_botpass_pdf,
     render_alfa_card_pdf,
 )
@@ -220,6 +222,21 @@ _FIELD_ORDER_ALFA_CARD = (
     FillReceipt.receipt_number,
 )
 
+# Альфа-Банк «перевод на счёт в другой банк»
+_FIELD_ORDER_ALFA_ACCOUNT = (
+    FillReceipt.amount,
+    FillReceipt.fee,
+    FillReceipt.transfer_datetime,
+    FillReceipt.document_number,
+    FillReceipt.receipt_number,
+    FillReceipt.sender_name,
+    FillReceipt.sender_account,
+    FillReceipt.recipient_name,
+    FillReceipt.recipient_card,
+    FillReceipt.recipient_bank,
+    FillReceipt.transfer_message,
+)
+
 _ALFA_CARD_FIELD_HINTS: dict[str, tuple[str, str]] = {
     "amount": ("Сумма перевода (руб.)", "9243"),
     "fee": ("Комиссия (руб., с копейками)", "0,00"),
@@ -230,6 +247,20 @@ _ALFA_CARD_FIELD_HINTS: dict[str, tuple[str, str]] = {
     "auth_code": ("Код авторизации", "7KW6CM"),
     "document_number": ("Код терминала", "193571"),
     "receipt_number": ("Номер операции в банке", "Z091405260059714"),
+}
+
+_ALFA_ACCOUNT_FIELD_HINTS: dict[str, tuple[str, str]] = {
+    "amount": ("Сумма перевода (руб.)", "4901"),
+    "fee": ("Комиссия (руб.)", "0"),
+    "transfer_datetime": ("Дата и время перевода", "14.05.2026 17:25:21 мск "),
+    "document_number": ("Номер операции", "C201405260050444 "),
+    "receipt_number": ("Номер платёжного поручения", "843382"),
+    "sender_name": ("Плательщик (ФИО)", "Ульянов Никита Валерьевич"),
+    "sender_account": ("Счёт списания плательщика", "40817810305903378783"),
+    "recipient_name": ("Получатель (ФИО)", "Вольных Денис Сергеевич"),
+    "recipient_card": ("Расчётный счёт получателя", "40817810251043470664"),
+    "recipient_bank": ("Банк получателя", "ПАО \"Банк ПСБ\""),
+    "transfer_message": ("Назначение перевода", "Оплата заказа #3832638; Вольных Денис Сергеевич"),
 }
 
 _ALFA_FIELD_HINTS: dict[str, tuple[str, str]] = {
@@ -439,7 +470,9 @@ def _field_order_for_template(template_id: str):
         return _FIELD_ORDER_TBANK_CARD
     if template_id == TEMPLATE_ALFA_CARD:
         return _FIELD_ORDER_ALFA_CARD
-    if template_id in (TEMPLATE_ALFA, TEMPLATE_ALFA_OTHER):
+    if template_id == TEMPLATE_ALFA_OTHER:
+        return _FIELD_ORDER_ALFA_ACCOUNT
+    if template_id == TEMPLATE_ALFA:
         return _FIELD_ORDER_ALFA
     return _FIELD_ORDER_CLASSIC
 
@@ -455,25 +488,42 @@ def _alfa_prompt_for_state(state: State, template_id: str) -> str:
     if not field_name:
         return "Введите значение:"
     card = template_id == TEMPLATE_ALFA_CARD
-    defaults = load_alfa_card_defaults() if card else load_alfa_defaults()
-    hints = _ALFA_CARD_FIELD_HINTS if card else _ALFA_FIELD_HINTS
+    account = template_id == TEMPLATE_ALFA_OTHER
+    if account:
+        defaults = load_alfa_account_defaults()
+        hints = _ALFA_ACCOUNT_FIELD_HINTS
+    elif card:
+        defaults = load_alfa_card_defaults()
+        hints = _ALFA_CARD_FIELD_HINTS
+    else:
+        defaults = load_alfa_defaults()
+        hints = _ALFA_FIELD_HINTS
     label, sample = hints.get(field_name, ("Значение", ""))
     if field_name in ("amount", "fee") and field_name in defaults:
         sample = str(defaults.get("commission" if field_name == "fee" else "amount", sample))
-    patch_key = {
-        "amount": "amount",
-        "fee": "commission",
-        "header_datetime": "datetime_header",
-        "transfer_datetime": "datetime_full",
-        "recipient_name": "recipient_name",
-        "recipient_card": "recipient_card" if card else "phone",
-        "recipient_bank": "recipient_bank",
-        "sender_account": "sender_card" if card else "account",
-        "document_number": "terminal_code" if card else "operation_id",
-        "auth_code": "auth_code" if card else "sbp_ref",
-        "transfer_message": "purpose",
-        "receipt_number": "operation_ref",
-    }.get(field_name, "")
+    from receipt_pdf_bot.receipt_alfa_patch import (
+        BOT_FIELD_TO_PATCH_ACCOUNT,
+        BOT_FIELD_TO_PATCH_CARD,
+    )
+    if account:
+        patch_map = BOT_FIELD_TO_PATCH_ACCOUNT
+    elif card:
+        patch_map = BOT_FIELD_TO_PATCH_CARD
+    else:
+        patch_map = {
+            "amount": "amount",
+            "fee": "commission",
+            "header_datetime": "datetime_header",
+            "transfer_datetime": "datetime_full",
+            "recipient_name": "recipient_name",
+            "recipient_card": "phone",
+            "recipient_bank": "recipient_bank",
+            "sender_account": "account",
+            "document_number": "operation_id",
+            "auth_code": "sbp_ref",
+            "transfer_message": "purpose",
+        }
+    patch_key = patch_map.get(field_name, "")
     if patch_key and patch_key in defaults:
         sample = str(defaults[patch_key])
     states = _field_order_for_template(template_id)
@@ -590,7 +640,8 @@ def _render_template_pdf(values: Dict[str, Any], template_id: str) -> tuple[byte
         return render_receipt_17_card_pdf(receipt), f"receipt_card_{current_date}.pdf"
     elif _is_alfa_template(template_id):
         if template_id == TEMPLATE_ALFA_OTHER:
-            raise RuntimeError("Этот тип чека Альфа Банка пока не реализован.")
+            pdf_bytes = render_alfa_account_pdf(values)
+            return pdf_bytes, f"alfa_account_{current_date}.pdf"
         if template_id == TEMPLATE_ALFA_CARD:
             pdf_bytes = render_alfa_card_pdf(values)
             return pdf_bytes, f"alfa_card_{current_date}.pdf"
@@ -684,7 +735,7 @@ async def handle_text(message: Message, state: FSMContext):
         return
 
     if text == BTN_ALFA_OTHER:
-        await message.answer(TEXT_ALFA_OTHER_SOON, reply_markup=get_alfa_variants_keyboard())
+        await _start_receipt_flow(message, state, TEMPLATE_ALFA_OTHER)
         return
 
     if text == BTN_ADMIN and user_id == ADMIN_ID:

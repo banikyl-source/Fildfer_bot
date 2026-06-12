@@ -761,6 +761,151 @@ def _overwrite_slot(dst: TTFont, src: TTFont, slot: int, glyph_name: str) -> int
     return int(aw)
 
 
+# Компонентные слоты subset карта→карта (PDF Document.pdf): перезаписываем
+# компонент цифрой и «расплющиваем» родительскую букву — без append глифа.
+_CARD_COMPONENT_PARENT_SLOT = {
+    48: 1,
+    49: 3,
+    50: 4,
+    51: 8,
+    52: 20,
+    53: 27,
+    54: 30,
+    55: 35,
+}
+
+
+def _char_for_cid_slot(unicode_to_cid: dict[str, str], slot: int) -> str:
+    slot_hex = f"{slot:04X}"
+    for ch, cid_hex in unicode_to_cid.items():
+        if cid_hex.upper() == slot_hex:
+            return ch
+    raise FontExtendError(f"Слот {slot_hex}: символ в ToUnicode не найден")
+
+
+def _build_card_digits_in_place(
+    parts: dict,
+    missing_digits: list[str],
+    tahoma_path: Path,
+) -> tuple[bytes, bytes, list, dict[str, str], list[str]]:
+    """Добавляет цифры 0–9 in-place: glyph count и размер FontFile2 не растут."""
+    tahoma_path = resolve_tahoma_path(tahoma_path)
+    pool = list(_CARD_COMPONENT_PARENT_SLOT)
+    if len(missing_digits) > len(pool):
+        raise FontExtendError(
+            "Слишком много недостающих цифр для in-place починки карта→карта: "
+            f"{missing_digits!r} (доступно слотов: {len(pool)})"
+        )
+
+    src_font = TTFont(tahoma_path)
+    src_cmap = src_font.getBestCmap() or {}
+    dst_font = TTFont(BytesIO(parts["font_dec"]))
+    unicode_to_cid = dict(parts["unicode_to_cid"])
+    w_list = list(parts["w_list"])
+    added: list[str] = []
+
+    for digit in sorted(missing_digits, key=ord):
+        comp_slot = pool.pop(0)
+        digit_code = ord(digit)
+        if digit_code not in src_cmap:
+            raise FontExtendError(f"Цифра {digit!r} отсутствует в Tahoma")
+
+        digit_aw = _overwrite_slot(
+            dst_font, src_font, comp_slot, src_cmap[digit_code]
+        )
+        unicode_to_cid[digit] = f"{comp_slot:04X}"
+        _ensure_w_entry(w_list, comp_slot, _pdf_glyph_width(dst_font, w_list, digit_aw))
+        added.append(digit)
+
+    _strip_font_tables(dst_font)
+    out_font = BytesIO()
+    dst_font.save(out_font, reorderTables=True)
+    new_tu_dec = _rebuild_cmap_bfchar(parts["tu_dec"], unicode_to_cid)
+    return out_font.getvalue(), new_tu_dec, w_list, unicode_to_cid, added
+
+
+def _patch_font_streams_in_bytes(
+    data: bytearray,
+    parts: dict,
+    *,
+    new_ff_dec: bytes,
+    new_tu_dec: bytes,
+    new_w_list: list,
+    cid_remap: dict[str, str] | None = None,
+) -> None:
+    file_data = bytes(data)
+    ff_span = _find_stream_span(file_data, parts["font_dec"])
+    tu_span = _find_stream_span(file_data, parts["tu_dec"])
+    if not ff_span or not tu_span:
+        raise FontExtendError("FontFile2 или ToUnicode stream не найден в PDF")
+
+    w_start, w_end = _parse_w_span(file_data)
+    new_ff_raw = _compress_like_pdf(new_ff_dec)
+    tu_flate = _stream_is_flate(tu_span)
+    new_tu_raw = _compress_like_pdf(new_tu_dec) if tu_flate else new_tu_dec
+    new_w_raw = _format_w_array(new_w_list)
+
+    delta = 0
+    _patch_span(data, w_start + delta, w_end + delta, new_w_raw)
+    delta += len(new_w_raw) - (w_end - w_start)
+    ff_span = _shift_span(ff_span, delta)
+    delta += _patch_stream_span(data, ff_span, new_ff_raw)
+    tu_span = _shift_span(tu_span, delta)
+    _patch_stream_span(data, tu_span, new_tu_raw)
+    if cid_remap:
+        _remap_cids_in_pdf_streams(data, cid_remap)
+
+
+def repair_card_digits_in_pdf_bytes(
+    data: bytearray,
+    pdf_path: Path,
+    *,
+    digits: set[str] | None = None,
+    tahoma_path: Path | None = None,
+    target_size: int | None = None,
+) -> FontExtendResult:
+    """
+    In-place добавление цифр в subset карта→карта без роста FontFile2.
+    onlypdf_robot сверяет отпечаток шрифта — append ломает «чек не распознан».
+    """
+    tahoma_path = resolve_tahoma_path(tahoma_path)
+    _require_pypdf()
+    src = Path(pdf_path)
+    parts = _extract_font_parts(src)
+    unicode_to_cid = parts["unicode_to_cid"]
+    need = sorted(
+        chars_needing_font_extension(set(digits or ()), unicode_to_cid),
+        key=ord,
+    )
+    need = [ch for ch in need if ch in "0123456789"]
+    if not need:
+        return FontExtendResult(False, (), unicode_to_cid)
+
+    new_ff_dec, new_tu_dec, new_w_list, new_map, added = _build_card_digits_in_place(
+        parts, need, tahoma_path
+    )
+    _patch_font_streams_in_bytes(
+        data,
+        parts,
+        new_ff_dec=new_ff_dec,
+        new_tu_dec=new_tu_dec,
+        new_w_list=new_w_list,
+    )
+    try:
+        verify_map = _load_unicode_to_cid_from_bytes(bytes(data))
+    except FontExtendError:
+        if not repair_tounicode_in_bytes(data):
+            raise FontExtendError(
+                "Не удалось восстановить /ToUnicode после in-place цифр"
+            ) from None
+        verify_map = _load_unicode_to_cid_from_bytes(bytes(data))
+
+    if target_size is not None:
+        fit_pdf_to_target(data, target_size)
+
+    return FontExtendResult(True, tuple(added), verify_map)
+
+
 def _build_extended_font_compact(
     parts: dict,
     chars: set[str],

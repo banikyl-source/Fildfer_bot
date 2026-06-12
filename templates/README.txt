@@ -1,16 +1,8 @@
-Шаблоны для чеков Альфа-Банка в Telegram-боте:
+Шаблоны для Telegram-бота (patch_alfa_amount, onlypdf_robot).
 
-  PROHOD_FIXED1.pdf      — СБП (по номеру телефона)
-  PROHOD_CARD_FIXED1.pdf — карта на карту (копия PDF Document.pdf, ~56 КБ)
+  PROHOD_FIXED1.pdf      — СБП (~73 КБ)
+  PROHOD_CARD_FIXED1.pdf — карта на карту (PDF Document.pdf, ~56 КБ)
+  PROHOD_ACCOUNT.pdf     — перевод на счёт в другой банк (PDF.pdf, ~46 КБ, цифры 0–9)
 
-Исходник карта→карта: PDF Document.pdf на рабочем столе.
-Для бота нужен оригинальный subset (~48 символов в CMap), НЕ alfa_card_fullfont.pdf.
-Fullfont (alfa_card_fullfont.pdf) — только для локальных тестов, бот пишет «чек не распознан».
-
-Переопределить в .env на BotHost (если нужно):
-
-  ALFA_TEMPLATE_PDF=/путь/к/PROHOD_FIXED1.pdf
-  ALFA_CARD_TEMPLATE_PDF=/путь/к/PROHOD_CARD_FIXED1.pdf
-
-PDF_CHECKER_ROOT на BotHost не нужен — модули patch_alfa_amount.py
-и font_extend.py лежат в vendor/ рядом с main.py.
+Карта→карта (PDF Document.pdf): в subset нет цифры «8» — суммы с «8» бот не распознаёт.
+Используйте «В другой банк» (PROHOD_ACCOUNT.pdf) — там «8» есть в оригинальном шрифте.

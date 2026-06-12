@@ -95,6 +95,27 @@ FIELD_ANCHORS_CARD: dict[str, tuple[float, float]] = {
     "operation_ref": (535.606, 304.75),
 }
 
+# Перевод на счёт в другой банк (PDF.pdf, VQWVIK+Tahoma).
+FIELD_ANCHORS_ACCOUNT: dict[str, tuple[float, float]] = {
+    "amount": (670.765, 35.45),
+    "commission": (642.265, 35.45),
+    "datetime_full": (613.765, 35.45),
+    "operation_id": (585.265, 35.45),
+    "payment_order": (556.765, 35.45),
+    "payer_name": (528.265, 35.45),
+    "sender_account": (499.765, 35.45),
+    "payer_bank": (471.265, 35.45),
+    "payer_bik": (698.195, 311.9),
+    "payer_corr": (668.625, 311.9),
+    "recipient_name": (639.055, 311.9),
+    "recipient_inn": (609.485, 311.9),
+    "recipient_account": (579.915, 311.9),
+    "recipient_bank": (550.345, 311.9),
+    "recipient_bik": (520.775, 311.9),
+    "recipient_corr": (491.205, 311.9),
+    "purpose": (461.635, 311.9),
+}
+
 FIELD_ANCHORS = FIELD_ANCHORS_SBP
 
 FIELD_LABELS_SBP: dict[str, str] = {
@@ -121,6 +142,26 @@ FIELD_LABELS_CARD: dict[str, str] = {
     "auth_code": "Код авторизации",
     "terminal_code": "Код терминала",
     "operation_ref": "Номер операции в банке",
+}
+
+FIELD_LABELS_ACCOUNT: dict[str, str] = {
+    "amount": "Сумма перевода",
+    "commission": "Комиссия",
+    "datetime_full": "Дата и время перевода",
+    "operation_id": "Номер операции",
+    "payment_order": "Номер платёжного поручения",
+    "payer_name": "Плательщик",
+    "sender_account": "Счёт списания плательщика",
+    "payer_bank": "Банк плательщика",
+    "payer_bik": "БИК банка плательщика",
+    "payer_corr": "Корр. счёт банка плательщика",
+    "recipient_name": "Получатель",
+    "recipient_inn": "ИНН/КПП получателя",
+    "recipient_account": "Расчётный счёт получателя",
+    "recipient_bank": "Банк получателя",
+    "recipient_bik": "БИК банка получателя",
+    "recipient_corr": "Корр. счёт банка получателя",
+    "purpose": "Назначение перевода",
 }
 
 FIELD_LABELS = FIELD_LABELS_SBP
@@ -199,20 +240,31 @@ def amount_numeric_value(text: str) -> int:
 def get_field_anchors(template: str) -> dict[str, tuple[float, float]]:
     if template == "card":
         return FIELD_ANCHORS_CARD
+    if template == "account":
+        return FIELD_ANCHORS_ACCOUNT
     return FIELD_ANCHORS_SBP
 
 
 def get_field_labels(template: str) -> dict[str, str]:
     if template == "card":
         return FIELD_LABELS_CARD
+    if template == "account":
+        return FIELD_LABELS_ACCOUNT
     return FIELD_LABELS_SBP
 
 
 def detect_receipt_template(pdf_path: str | Path) -> str:
-    """Определяет тип чека: sbp (СБП) или card (карта→карта)."""
+    """Определяет тип чека: sbp, card или account (перевод на счёт)."""
     src = Path(pdf_path)
     cmap = load_unicode_to_cid(src)
     data = src.read_bytes()
+    account_fields = discover_fields_in_bytes(data, cmap, FIELD_ANCHORS_ACCOUNT)
+    if (
+        "payment_order" in account_fields
+        and "payer_name" in account_fields
+        and "recipient_account" in account_fields
+    ):
+        return "account"
     card_fields = discover_fields_in_bytes(data, cmap, FIELD_ANCHORS_CARD)
     if "sender_card" in card_fields and "*" in card_fields["sender_card"].text:
         return "card"
@@ -382,7 +434,7 @@ def format_text_like(new_value: str, template: str) -> str:
 
 def format_field_value(field_id: str, value: Any, template: str) -> str:
     """Форматирует значение поля под шаблон исходного текста."""
-    if field_id == "recipient_name":
+    if field_id in ("recipient_name", "payer_name"):
         return format_recipient_name(str(value), template)
     if field_id in PADDED_CARD_FIELDS:
         return format_text_like(str(value).strip(), template)
@@ -772,7 +824,7 @@ def recompress_to_size(dec: bytes, target: int) -> bytes | None:
         c = zlib.compress(dec, level)
         if len(c) == target:
             return c
-    for pad in range(1, 512):
+    for pad in range(1, 4096):
         suffix = b"\n%" + (b"%" * pad)
         for level in range(10):
             c = zlib.compress(dec + suffix, level)
@@ -1046,7 +1098,10 @@ def list_fields_report(pdf_path: Path, *, template: str | None = None) -> None:
     if not fields:
         print("Поля не найдены (возможно, не CID-чек).")
         return
-    kind = "карта на карту" if receipt_template == "card" else "СБП"
+    kind = {
+        "card": "карта на карту",
+        "account": "перевод на счёт",
+    }.get(receipt_template, "СБП")
     print(f"Поля в {pdf_path.name} ({kind}):\n")
     labels = get_field_labels(receipt_template)
     anchors = get_field_anchors(receipt_template)
@@ -1384,10 +1439,19 @@ DEFAULT_BOT_SQUASH = Path(r"C:\Users\Жопсик\Desktop\pdf58_squash.pdf")
 DEFAULT_BOT_PASS_TEMPLATE = Path(r"C:\Users\Жопсик\Desktop\test_patch.pdf")
 DEFAULT_CARD_INPUT = Path(r"C:\Users\Жопсик\Desktop\PDF Document.pdf")
 DEFAULT_CARD_FULLFONT = Path(r"C:\Users\Жопсик\Desktop\alfa_card_fullfont.pdf")
+DEFAULT_ACCOUNT_INPUT = Path(r"d:\Загрузки\PDF.pdf")
 # Оригинал карта→карта: subset 48 символов, FontFile2 ≈ 17584 байт.
 CARD_BOT_SAFE_FONT_MARKER = "MIYPCA"
 CARD_BOT_SAFE_CMAP_MAX = 52
 CARD_BOT_SAFE_FONT_FILE2_MAX = 18_000
+CARD_BOT_SAFE_FONT_FILE2_EXACT = 17_584
+CARD_BOT_SAFE_GLYPH_COUNT = 56
+# Перевод на счёт в другой банк: subset с полными цифрами 0–9 (в т.ч. «8»).
+ACCOUNT_BOT_SAFE_FONT_MARKER = "VQWVIK"
+ACCOUNT_BOT_SAFE_CMAP_MAX = 72
+ACCOUNT_BOT_SAFE_FONT_FILE2_EXACT = 23_536
+ACCOUNT_BOT_SAFE_GLYPH_COUNT = 86
+ACCOUNT_BOT_SAFE_FILE_SIZE = 46_257
 # Лимит для компактного squash-шаблона (~60 КБ). Bot-pass без подмены шрифта ~73 КБ.
 MAX_PDF_BYTES = 60 * 1024
 MAX_PDF_BYTES_BOT_PASS = 76 * 1024
@@ -1477,16 +1541,20 @@ def repair_card_template_digits(
     dst = Path(output_pdf) if output_pdf else src
     data = bytearray(src.read_bytes())
     original_size = len(data)
-    from font_extend import extend_font_compact_in_pdf_bytes, fit_pdf_to_target
+    original_ff2 = card_font_file2_size(src)
+    from font_extend import fit_pdf_to_target, repair_card_digits_in_pdf_bytes
 
-    result = extend_font_compact_in_pdf_bytes(data, src, chars=set(missing))
+    result = repair_card_digits_in_pdf_bytes(
+        data,
+        src,
+        digits=set(missing),
+        target_size=original_size,
+    )
     if not result.extended:
         shown = ", ".join(repr(ch) for ch in missing)
         raise AmountPatchError(
-            f"Не удалось добавить цифры в шаблон {src.name}: {shown}"
+            f"Не удалось добавить цифры in-place в шаблон {src.name}: {shown}"
         )
-    if output_pdf is None:
-        fit_pdf_to_target(data, original_size)
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_bytes(data)
 
@@ -1501,7 +1569,9 @@ def repair_card_template_digits(
     if not is_card_bot_safe_template(dst):
         raise AmountPatchError(
             f"Шаблон {dst.name} после добавления цифр не проходит bot-safe проверку "
-            f"(CMap {len(new_cmap)}, FontFile2 {card_font_file2_size(dst)} байт)."
+            f"(CMap {len(new_cmap)}, FontFile2 {card_font_file2_size(dst)} байт, "
+            f"глифов {card_font_glyph_count(dst)}, было {original_ff2} байт).\n"
+            "onlypdf_robot сверяет отпечаток шрифта — нужен in-place subset как в PDF Document.pdf."
         )
     return dst
 
@@ -1849,6 +1919,23 @@ def card_font_file2_size(pdf_path: str | Path) -> int:
     return len(ff)
 
 
+def card_font_glyph_count(pdf_path: str | Path) -> int:
+    try:
+        import pypdf
+        from io import BytesIO
+        from fontTools.ttLib import TTFont
+    except ImportError as exc:
+        raise AmountPatchError("Нужны pypdf и fonttools") from exc
+
+    ff = (
+        pypdf.PdfReader(str(pdf_path))
+        .pages[0]["/Resources"]["/Font"]["/F1"]["/DescendantFonts"][0]
+        ["/FontDescriptor"]["/FontFile2"]
+        .get_data()
+    )
+    return TTFont(BytesIO(ff))["maxp"].numGlyphs
+
+
 def is_card_bot_safe_template(pdf_path: str | Path) -> bool:
     """Шаблон карта→карта без расширенного subset (как PDF Document.pdf)."""
     src = Path(pdf_path)
@@ -1859,7 +1946,12 @@ def is_card_bot_safe_template(pdf_path: str | Path) -> bool:
             return False
         if len(load_unicode_to_cid(src)) > CARD_BOT_SAFE_CMAP_MAX:
             return False
-        if card_font_file2_size(src) > CARD_BOT_SAFE_FONT_FILE2_MAX:
+        ff2 = card_font_file2_size(src)
+        if ff2 > CARD_BOT_SAFE_FONT_FILE2_MAX:
+            return False
+        if ff2 != CARD_BOT_SAFE_FONT_FILE2_EXACT:
+            return False
+        if card_font_glyph_count(src) != CARD_BOT_SAFE_GLYPH_COUNT:
             return False
     except Exception:
         return False
@@ -1918,6 +2010,7 @@ def validate_card_bot_safe_patch(
             label = FIELD_LABELS_CARD.get(field_id, field_id)
             shown = ", ".join(repr(ch) for ch in missing_here)
             field_problems.append(f"  • {label} ({field_id}): {shown} в {text!r}")
+            continue
         new_raw = encode_cid_text(text, cmap)
         if len(new_raw) != len(discovered[field_id].raw):
             label = FIELD_LABELS_CARD.get(field_id, field_id)
@@ -1930,15 +2023,119 @@ def validate_card_bot_safe_patch(
     if missing:
         shown = ", ".join(repr(ch) for ch in sorted(missing, key=ord))
         details = "\n".join(field_problems) if field_problems else ""
+        digit_hint = ""
+        if "8" in missing:
+            digit_hint = (
+                "\nВ шаблоне PDF Document.pdf нет цифры «8» (в оригинале сумма 1 466 ₽). "
+                "onlypdf_robot сверяет FontFile2/ToUnicode — расширять шрифт нельзя. "
+                "Суммы с «8» не пройдут бота; используйте другую цифру или оригинальный чек банка, "
+                "где «8» уже была в сумме.\n"
+            )
         raise AmountPatchError(
             f"Карта→карта: в subset нет символов: {shown}.\n"
+            f"{details}\n"
+            f"{bot_safe_charset_report(cmap)}\n"
+            f"{digit_hint}"
+            "Нельзя расширять шрифт — бот пишет «чек не распознан»."
+        )
+    if length_problems:
+        raise AmountPatchError(
+            "Карта→карта: длина поля изменится (ломает размер PDF и бота):\n"
+            + "\n".join(length_problems)
+        )
+
+
+def is_account_bot_safe_template(pdf_path: str | Path) -> bool:
+    """Шаблон «перевод на счёт» с полным набором цифр (в т.ч. «8»)."""
+    src = Path(pdf_path)
+    if not src.is_file():
+        return False
+    try:
+        if ACCOUNT_BOT_SAFE_FONT_MARKER not in pdf_base_font_name(src):
+            return False
+        if len(load_unicode_to_cid(src)) > ACCOUNT_BOT_SAFE_CMAP_MAX:
+            return False
+        if card_font_file2_size(src) != ACCOUNT_BOT_SAFE_FONT_FILE2_EXACT:
+            return False
+        if card_font_glyph_count(src) != ACCOUNT_BOT_SAFE_GLYPH_COUNT:
+            return False
+        if missing_receipt_digits(load_unicode_to_cid(src)):
+            return False
+    except Exception:
+        return False
+    return True
+
+
+def resolve_account_bot_pass_template(explicit: Path) -> Path:
+    """Шаблон перевода на счёт (PDF.pdf / PROHOD_ACCOUNT.pdf)."""
+    if is_account_bot_safe_template(explicit):
+        return explicit
+    candidates = (
+        DEFAULT_ACCOUNT_INPUT,
+        explicit.parent / "PROHOD_ACCOUNT.pdf",
+        Path(__file__).resolve().parent
+        / "Fildfer_bot3-main"
+        / "templates"
+        / "PROHOD_ACCOUNT.pdf",
+    )
+    for candidate in candidates:
+        if is_account_bot_safe_template(candidate):
+            return candidate
+    raise AmountPatchError(
+        f"Шаблон {explicit.name} не подходит для «перевод на счёт».\n"
+        f"Используйте оригинал PDF.pdf (~{ACCOUNT_BOT_SAFE_FILE_SIZE} байт, "
+        f"FontFile2 {ACCOUNT_BOT_SAFE_FONT_FILE2_EXACT}, цифры 0–9).\n"
+        "Скопируйте в templates/PROHOD_ACCOUNT.pdf."
+    )
+
+
+def validate_account_bot_safe_patch(
+    pdf_path: str | Path, field_values: dict[str, Any]
+) -> None:
+    """Проверяет патч «перевод на счёт» без расширения шрифта."""
+    src = resolve_account_bot_pass_template(Path(pdf_path))
+    discovered = discover_fields(src, template="account")
+    cmap = load_unicode_to_cid(src)
+    needed: set[str] = set()
+    field_problems: list[str] = []
+    length_problems: list[str] = []
+
+    for field_id, value in field_values.items():
+        if field_id not in discovered:
+            continue
+        template = discovered[field_id].text
+        text = format_field_value(field_id, value, template)
+        needed.update(text)
+        missing_here = sorted(
+            {ch for ch in text if ch not in cmap and not ch.isspace()},
+            key=ord,
+        )
+        if missing_here:
+            label = FIELD_LABELS_ACCOUNT.get(field_id, field_id)
+            shown = ", ".join(repr(ch) for ch in missing_here)
+            field_problems.append(f"  • {label} ({field_id}): {shown} в {text!r}")
+            continue
+        new_raw = encode_cid_text(text, cmap)
+        if len(new_raw) != len(discovered[field_id].raw):
+            label = FIELD_LABELS_ACCOUNT.get(field_id, field_id)
+            length_problems.append(
+                f"  • {label} ({field_id}): hex {len(discovered[field_id].raw)} "
+                f"→ {len(new_raw)} ({text!r})"
+            )
+
+    missing = chars_needing_font_extension(needed, cmap)
+    if missing:
+        shown = ", ".join(repr(ch) for ch in sorted(missing, key=ord))
+        details = "\n".join(field_problems) if field_problems else ""
+        raise AmountPatchError(
+            f"Перевод на счёт: в subset нет символов: {shown}.\n"
             f"{details}\n"
             f"{bot_safe_charset_report(cmap)}\n"
             "Нельзя расширять шрифт — бот пишет «чек не распознан»."
         )
     if length_problems:
         raise AmountPatchError(
-            "Карта→карта: длина поля изменится (ломает размер PDF и бота):\n"
+            "Перевод на счёт: длина поля изменится (ломает размер PDF и бота):\n"
             + "\n".join(length_problems)
         )
 
@@ -2148,13 +2345,14 @@ def main() -> int:
     )
     parser.add_argument(
         "--template",
-        choices=("auto", "sbp", "card"),
+        choices=("auto", "sbp", "card", "account"),
         default="auto",
-        help="Тип чека: СБП (sbp), карта→карта (card) или авто (auto)",
+        help="Тип чека: СБП (sbp), карта→карта (card), счёт (account) или авто (auto)",
     )
 
     all_field_labels = dict(FIELD_LABELS_SBP)
     all_field_labels.update(FIELD_LABELS_CARD)
+    all_field_labels.update(FIELD_LABELS_ACCOUNT)
     for field_id, label in all_field_labels.items():
         if field_id == "amount":
             continue

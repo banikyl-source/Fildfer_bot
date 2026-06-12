@@ -16,10 +16,12 @@ _BOT_ROOT = _MODULE_DIR.parents[1]  # Fildfer_bot3-main
 _VENDOR_DIR = _BOT_ROOT / "vendor"
 DEFAULTS_FILE = _MODULE_DIR / "alfa_defaults.json"
 CARD_DEFAULTS_FILE = _MODULE_DIR / "alfa_card_defaults.json"
+ACCOUNT_DEFAULTS_FILE = _MODULE_DIR / "alfa_account_defaults.json"
 BOT_TEMPLATES = _BOT_ROOT / "templates"
 DESKTOP = Path.home() / "Desktop"
 DEFAULT_ALFA_TEMPLATE = BOT_TEMPLATES / "PROHOD_FIXED1.pdf"
 DEFAULT_ALFA_CARD_TEMPLATE = BOT_TEMPLATES / "PROHOD_CARD_FIXED1.pdf"
+DEFAULT_ALFA_ACCOUNT_TEMPLATE = BOT_TEMPLATES / "PROHOD_ACCOUNT.pdf"
 _PATCH_MODULE = "patch_alfa_amount.py"
 
 
@@ -99,6 +101,21 @@ BOT_FIELD_TO_PATCH_CARD: dict[str, str] = {
     "receipt_number": "operation_ref",
 }
 
+# Поля бота → patch_alfa_amount для «перевод на счёт в другой банк»
+BOT_FIELD_TO_PATCH_ACCOUNT: dict[str, str] = {
+    "amount": "amount",
+    "fee": "commission",
+    "transfer_datetime": "datetime_full",
+    "document_number": "operation_id",
+    "receipt_number": "payment_order",
+    "sender_name": "payer_name",
+    "sender_account": "sender_account",
+    "recipient_name": "recipient_name",
+    "recipient_card": "recipient_account",
+    "recipient_bank": "recipient_bank",
+    "transfer_message": "purpose",
+}
+
 
 def _ensure_checker_import() -> None:
     root = str(_find_pdf_checker_root())
@@ -121,6 +138,12 @@ def load_alfa_defaults() -> dict[str, Any]:
 def load_alfa_card_defaults() -> dict[str, Any]:
     if CARD_DEFAULTS_FILE.is_file():
         return json.loads(CARD_DEFAULTS_FILE.read_text(encoding="utf-8"))
+    return {}
+
+
+def load_alfa_account_defaults() -> dict[str, Any]:
+    if ACCOUNT_DEFAULTS_FILE.is_file():
+        return json.loads(ACCOUNT_DEFAULTS_FILE.read_text(encoding="utf-8"))
     return {}
 
 
@@ -153,11 +176,21 @@ def build_patch_values(
     defaults: dict[str, Any] | None = None,
     *,
     card: bool = False,
+    account: bool = False,
 ) -> dict[str, Any]:
     """Собирает словарь для replace_fields_in_pdf из ответов пользователя."""
-    mapping = BOT_FIELD_TO_PATCH_CARD if card else BOT_FIELD_TO_PATCH
-    if defaults is None:
-        defaults = load_alfa_card_defaults() if card else load_alfa_defaults()
+    if account:
+        mapping = BOT_FIELD_TO_PATCH_ACCOUNT
+        if defaults is None:
+            defaults = load_alfa_account_defaults()
+    elif card:
+        mapping = BOT_FIELD_TO_PATCH_CARD
+        if defaults is None:
+            defaults = load_alfa_card_defaults()
+    else:
+        mapping = BOT_FIELD_TO_PATCH
+        if defaults is None:
+            defaults = load_alfa_defaults()
     base = dict(defaults)
     for bot_key, patch_key in mapping.items():
         raw = bot_values.get(bot_key)
@@ -246,6 +279,35 @@ def find_alfa_card_template() -> Path:
     )
 
 
+def find_alfa_account_template() -> Path:
+    """Ищет шаблон «перевод на счёт в другой банк» (PDF.pdf / PROHOD_ACCOUNT.pdf)."""
+    env = os.getenv("ALFA_ACCOUNT_TEMPLATE_PDF", "").strip()
+    if env:
+        path = Path(env)
+        if path.is_file():
+            return path
+        raise FileNotFoundError(f"ALFA_ACCOUNT_TEMPLATE_PDF не найден: {path}")
+
+    from patch_alfa_amount import AmountPatchError, resolve_account_bot_pass_template
+
+    preferred = (
+        DEFAULT_ALFA_ACCOUNT_TEMPLATE,
+        DESKTOP / "PROHOD_ACCOUNT.pdf",
+        Path(r"d:\Загрузки\PDF.pdf"),
+    )
+    for candidate in preferred:
+        if candidate.is_file():
+            try:
+                return resolve_account_bot_pass_template(candidate)
+            except AmountPatchError:
+                continue
+
+    raise FileNotFoundError(
+        f"Не найден шаблон «перевод на счёт» (PDF.pdf / PROHOD_ACCOUNT.pdf).\n"
+        f"Положите оригинал в {BOT_TEMPLATES} как PROHOD_ACCOUNT.pdf."
+    )
+
+
 def render_alfa_botpass_pdf(bot_values: dict[str, Any]) -> bytes:
     """Патчит bot-pass шаблон СБП и возвращает байты PDF."""
     return _render_alfa_pdf(bot_values, card=False)
@@ -256,29 +318,49 @@ def render_alfa_card_pdf(bot_values: dict[str, Any]) -> bytes:
     return _render_alfa_pdf(bot_values, card=True)
 
 
-def _render_alfa_pdf(bot_values: dict[str, Any], *, card: bool) -> bytes:
+def render_alfa_account_pdf(bot_values: dict[str, Any]) -> bytes:
+    """Патчит шаблон «перевод на счёт» и возвращает байты PDF."""
+    return _render_alfa_pdf(bot_values, account=True)
+
+
+def _render_alfa_pdf(
+    bot_values: dict[str, Any],
+    *,
+    card: bool = False,
+    account: bool = False,
+) -> bytes:
     _ensure_checker_import()
     from patch_alfa_amount import (
+        ACCOUNT_BOT_SAFE_FONT_FILE2_EXACT,
+        ACCOUNT_BOT_SAFE_GLYPH_COUNT,
         AmountPatchError,
-        load_unicode_to_cid,
-        missing_receipt_digits,
-        repair_card_template_digits,
+        CARD_BOT_SAFE_FONT_FILE2_EXACT,
+        CARD_BOT_SAFE_GLYPH_COUNT,
+        card_font_file2_size,
+        card_font_glyph_count,
         replace_fields_in_pdf,
+        resolve_account_bot_pass_template,
         resolve_card_bot_pass_template,
+        validate_account_bot_safe_patch,
         validate_card_bot_safe_patch,
     )
 
-    template = find_alfa_card_template() if card else find_alfa_template()
-    patch_values = build_patch_values(bot_values, card=card)
-    prepared_template: Path | None = None
-
-    if card:
+    if account:
+        template = find_alfa_account_template()
+        patch_values = build_patch_values(bot_values, account=True)
+        template = resolve_account_bot_pass_template(template)
+        validate_account_bot_safe_patch(template, patch_values)
+        receipt_template = "account"
+    elif card:
+        template = find_alfa_card_template()
+        patch_values = build_patch_values(bot_values, card=True)
         template = resolve_card_bot_pass_template(template)
-        if missing_receipt_digits(load_unicode_to_cid(template)):
-            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_tpl:
-                prepared_template = Path(tmp_tpl.name)
-            template = repair_card_template_digits(template, prepared_template)
         validate_card_bot_safe_patch(template, patch_values)
+        receipt_template = "card"
+    else:
+        template = find_alfa_template()
+        patch_values = build_patch_values(bot_values)
+        receipt_template = None
 
     template_size = template.stat().st_size
 
@@ -292,9 +374,9 @@ def _render_alfa_pdf(bot_values: dict[str, Any], *, card: bool) -> bytes:
             out_path,
             verify=False,
             extend_font=False,
-            template="card" if card else None,
+            template=receipt_template,
         )
-        if card:
+        if card or account:
             from font_extend import fit_pdf_to_target
 
             out_data = bytearray(out_path.read_bytes())
@@ -304,7 +386,23 @@ def _render_alfa_pdf(bot_values: dict[str, Any], *, card: bool) -> bytes:
             if out_size != template_size and abs(out_size - template_size) > 2:
                 raise AmountPatchError(
                     f"Размер PDF изменился ({template_size} → {out_size} байт). "
-                    "Бот не распознает чек — проверьте шаблон (нужен PDF Document.pdf, не fullfont)."
+                    "Бот не распознает чек — проверьте шаблон."
+                )
+            out_ff2 = card_font_file2_size(out_path)
+            out_glyphs = card_font_glyph_count(out_path)
+            if card:
+                expected_ff2 = CARD_BOT_SAFE_FONT_FILE2_EXACT
+                expected_glyphs = CARD_BOT_SAFE_GLYPH_COUNT
+                kind = "карта→карта"
+            else:
+                expected_ff2 = ACCOUNT_BOT_SAFE_FONT_FILE2_EXACT
+                expected_glyphs = ACCOUNT_BOT_SAFE_GLYPH_COUNT
+                kind = "перевод на счёт"
+            if out_ff2 != expected_ff2 or out_glyphs != expected_glyphs:
+                raise AmountPatchError(
+                    f"FontFile2 изменился ({out_ff2} байт, {out_glyphs} глифов). "
+                    f"Нужно {expected_ff2} байт и {expected_glyphs} глифов ({kind}) — "
+                    "бот пишет «чек не распознан»."
                 )
         return out_path.read_bytes()
     except AmountPatchError as exc:
@@ -312,5 +410,3 @@ def _render_alfa_pdf(bot_values: dict[str, Any], *, card: bool) -> bytes:
     finally:
         if out_path.is_file():
             out_path.unlink(missing_ok=True)
-        if prepared_template is not None and prepared_template.is_file():
-            prepared_template.unlink(missing_ok=True)
