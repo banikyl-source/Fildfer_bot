@@ -334,8 +334,11 @@ def _render_alfa_pdf(
         ACCOUNT_BOT_SAFE_FONT_FILE2_EXACT,
         ACCOUNT_BOT_SAFE_GLYPH_COUNT,
         AmountPatchError,
+        CARD_BOT_SAFE_CONTENT_STREAM,
+        CARD_BOT_SAFE_FILE_SIZE,
         CARD_BOT_SAFE_FONT_FILE2_EXACT,
         CARD_BOT_SAFE_GLYPH_COUNT,
+        CARD_PATCH_MAX_SIZE_DELTA,
         card_font_file2_md5,
         card_font_file2_size,
         card_font_glyph_count,
@@ -381,13 +384,26 @@ def _render_alfa_pdf(
             template=receipt_template,
         )
         if card or account:
-            from font_extend import fit_pdf_to_target
+            from font_extend import fit_pdf_to_target, stabilize_card_content_stream
 
             out_data = bytearray(out_path.read_bytes())
+            if card:
+                stabilize_card_content_stream(
+                    out_data, target_compressed=CARD_BOT_SAFE_CONTENT_STREAM
+                )
             fit_pdf_to_target(out_data, template_size)
             out_path.write_bytes(out_data)
             out_size = out_path.stat().st_size
-            if out_size != template_size and abs(out_size - template_size) > 2:
+            expected_size = (
+                CARD_BOT_SAFE_FILE_SIZE if card else template_size
+            )
+            if card and out_size != expected_size and abs(out_size - expected_size) > CARD_PATCH_MAX_SIZE_DELTA:
+                raise AmountPatchError(
+                    f"Размер PDF изменился ({expected_size} → {out_size} байт). "
+                    "Бот не распознает чек — пересоберите PROHOD_CARD_FIXED1 "
+                    "(--fix-card-template из PDF Document.pdf)."
+                )
+            if account and out_size != template_size and abs(out_size - template_size) > 2:
                 raise AmountPatchError(
                     f"Размер PDF изменился ({template_size} → {out_size} байт). "
                     "Бот не распознает чек — проверьте шаблон."

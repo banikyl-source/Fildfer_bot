@@ -888,6 +888,65 @@ def _patch_font_streams_in_bytes(
 
 
 CARD_PATCH_STREAM_TARGET = 816
+# Оригинальный zlib-поток полей PDF Document.pdf (preexpand до 816 ломает бота).
+CARD_CONTENT_STREAM_ORIGINAL = 794
+# После патча полей поток может вырасти на несколько байт (794→797); бот принимает ~56117–56122.
+CARD_PATCH_MAX_STREAM_GROWTH = 8
+
+
+def _recompress_padded(dec: bytes, target: int) -> bytes | None:
+    """Один проход: level + comment padding → zlib ровно target байт."""
+    for level in range(10):
+        c = zlib.compress(dec, level)
+        if len(c) == target:
+            return c
+    for pad in range(4096):
+        padded = dec + b"\n%" + (b"%" * pad)
+        for level in range(10):
+            c = zlib.compress(padded, level)
+            if len(c) == target:
+                return c
+    return None
+
+
+def stabilize_card_content_stream(
+    data: bytearray,
+    *,
+    target_compressed: int | None = CARD_CONTENT_STREAM_ORIGINAL,
+) -> bool:
+    """
+    Нормализует zlib content stream (Tj) карта→карта.
+
+    Для шаблона цель — target_compressed (794). После патча hex-поток часто
+    несжимается обратно в 794; тогда фиксируем текущий размер (797 и т.п.).
+    """
+    file_data = bytes(data)
+    for m in STREAM_RE.finditer(file_data):
+        raw = m.group(2)
+        try:
+            dec = zlib.decompress(raw)
+        except zlib.error:
+            continue
+        if b"Tj" not in dec:
+            continue
+
+        cur = len(raw)
+        targets: list[int] = []
+        if target_compressed is not None and target_compressed != cur:
+            targets.append(target_compressed)
+        if cur not in targets:
+            targets.append(cur)
+
+        for target in targets:
+            new_raw = _recompress_padded(dec, target)
+            if new_raw is None:
+                continue
+            if new_raw != raw:
+                span = _StreamSpan(m.start(), m.start(2), m.end(2), raw)
+                _patch_stream_span(data, span, new_raw)
+            return True
+        return False
+    return False
 
 
 def preexpand_card_patch_stream(

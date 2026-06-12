@@ -1287,6 +1287,12 @@ def replace_fields_in_pdf(
         if len(original) > MAX_PDF_BYTES:
             fit_pdf_to_target(original, MAX_PDF_BYTES)
     else:
+        if receipt_template == "card" and is_card_bot_safe_template(src):
+            from font_extend import stabilize_card_content_stream
+
+            stabilize_card_content_stream(
+                original, target_compressed=CARD_BOT_SAFE_CONTENT_STREAM
+            )
         fit_pdf_to_target(original, original_size)
     dst.write_bytes(original)
 
@@ -1301,7 +1307,8 @@ def replace_fields_in_pdf(
                 "Используйте PROHOD_CARD_FIXED1.pdf (--fix-card-template) "
                 "и патч с --no-extend-font."
             )
-        if dst.stat().st_size != original_size:
+        size_delta = abs(dst.stat().st_size - original_size)
+        if size_delta > CARD_PATCH_MAX_SIZE_DELTA:
             raise AmountPatchError(
                 f"Размер PDF изменился ({original_size} → {dst.stat().st_size} байт). "
                 "Бот не распознает чек — нужен шаблон с --fix-card-template."
@@ -1520,6 +1527,12 @@ CARD_BOT_SAFE_CMAP_MAX = 52
 CARD_BOT_SAFE_FONT_FILE2_MAX = 18_000
 CARD_BOT_SAFE_FONT_FILE2_EXACT = 17_584
 CARD_BOT_SAFE_GLYPH_COUNT = 56
+# PDF Document.pdf = 56086; шаблон с настоящей «8» (донор FontFile2) ≈ 56117, не 56139.
+CARD_ORIGINAL_FILE_SIZE = 56_086
+CARD_BOT_SAFE_FILE_SIZE = 56_117
+CARD_BOT_SAFE_CONTENT_STREAM = 794
+# Патч полей может увеличить PDF на несколько байт (56117→56120); бот принимает такой диапазон.
+CARD_PATCH_MAX_SIZE_DELTA = 5
 # Перевод на счёт в другой банк: subset с полными цифрами 0–9 (в т.ч. «8»).
 ACCOUNT_BOT_SAFE_FONT_MARKER = "VQWVIK"
 ACCOUNT_BOT_SAFE_CMAP_MAX = 72
@@ -1612,8 +1625,8 @@ def repair_card_template_digits(
         _extract_font_parts,
         digits_with_borrowed_c_glyph,
         fit_pdf_to_target,
-        preexpand_card_patch_stream,
         repair_card_digits_in_pdf_bytes,
+        stabilize_card_content_stream,
     )
 
     cmap = load_unicode_to_cid(src)
@@ -1625,9 +1638,13 @@ def repair_card_template_digits(
 
     dst = Path(output_pdf) if output_pdf else src
     data = bytearray(src.read_bytes())
-    original_size = len(data)
     original_ff2 = card_font_file2_size(src)
     fix_digits = set(missing) | set(broken)
+    canonical_size = (
+        CARD_BOT_SAFE_FILE_SIZE
+        if src.resolve() == DEFAULT_CARD_INPUT.resolve()
+        else len(data)
+    )
 
     font_donor: Path | None = None
     try:
@@ -1640,19 +1657,25 @@ def repair_card_template_digits(
         src,
         digits=fix_digits,
         font_donor=font_donor,
-        target_size=original_size,
+        target_size=canonical_size,
     )
     if not result.extended:
         shown = ", ".join(repr(ch) for ch in sorted(fix_digits, key=ord))
         raise AmountPatchError(
             f"Не удалось добавить цифры in-place в шаблон {src.name}: {shown}"
         )
-    if not preexpand_card_patch_stream(data):
-        if not fit_pdf_to_target(data, original_size):
-            raise AmountPatchError(
-                f"Не удалось подогнать размер {src.name} к {original_size} байт после "
-                "починки цифр — бот может не распознать чек."
-            )
+    if not stabilize_card_content_stream(
+        data, target_compressed=CARD_BOT_SAFE_CONTENT_STREAM
+    ):
+        raise AmountPatchError(
+            f"Не удалось стабилизировать content stream ({src.name}) "
+            f"к {CARD_BOT_SAFE_CONTENT_STREAM} байт — бот может не распознать чек."
+        )
+    if not fit_pdf_to_target(data, canonical_size):
+        raise AmountPatchError(
+            f"Не удалось подогнать размер {src.name} к {canonical_size} байт после "
+            "починки цифр — бот может не распознать чек."
+        )
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_bytes(data)
 
@@ -2177,6 +2200,9 @@ def is_card_bot_safe_template(pdf_path: str | Path) -> bool:
         return False
     try:
         if CARD_BOT_SAFE_FONT_MARKER not in pdf_base_font_name(src):
+            return False
+        size = src.stat().st_size
+        if size not in (CARD_BOT_SAFE_FILE_SIZE, CARD_ORIGINAL_FILE_SIZE):
             return False
         if len(load_unicode_to_cid(src)) > CARD_BOT_SAFE_CMAP_MAX:
             return False
