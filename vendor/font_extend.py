@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import zlib
 from copy import deepcopy
@@ -26,6 +27,7 @@ from patch_alfa_amount import (
     AmountPatchError,
 )
 
+_MODULE_DIR = Path(__file__).resolve().parent
 DEFAULT_TAHOMA = Path(r"C:\Windows\Fonts\tahoma.ttf")
 
 # Полный набор для чеков: кириллица, цифры, знаки, NBSP, базовая латиница.
@@ -72,6 +74,73 @@ _FONT_STRIP_TABLES = (
 
 class FontExtendError(AmountPatchError):
     pass
+
+
+def _tahoma_search_paths() -> list[Path]:
+    """Кандидаты для системного Tahoma (Windows, WSL, Linux, vendor/fonts)."""
+    candidates: list[Path] = []
+
+    for env_name in ("TAHOMA_TTF", "PDF_CHECKER_TAHOMA"):
+        env_path = os.getenv(env_name, "").strip()
+        if env_path:
+            candidates.append(Path(env_path).expanduser())
+
+    candidates.extend(
+        (
+            _MODULE_DIR / "fonts" / "tahoma.ttf",
+            _MODULE_DIR.parent / "fonts" / "tahoma.ttf",
+        )
+    )
+
+    windir = os.getenv("WINDIR", r"C:\Windows")
+    candidates.extend(
+        (
+            Path(windir) / "Fonts" / "tahoma.ttf",
+            Path(r"C:\Windows\Fonts\tahoma.ttf"),
+            Path.home() / "AppData/Local/Microsoft/Windows/Fonts/tahoma.ttf",
+            Path("/mnt/c/Windows/Fonts/tahoma.ttf"),
+        )
+    )
+
+    candidates.extend(
+        (
+            Path("/usr/share/fonts/truetype/msttcorefonts/tahoma.ttf"),
+            Path("/usr/share/fonts/truetype/microsoft-fonts/tahoma.ttf"),
+            Path("/usr/share/fonts/TTF/tahoma.ttf"),
+            Path("/usr/local/share/fonts/tahoma.ttf"),
+        )
+    )
+
+    seen: set[Path] = set()
+    unique: list[Path] = []
+    for path in candidates:
+        key = path.as_posix().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(path)
+    return unique
+
+
+def resolve_tahoma_path(explicit: Path | None = None) -> Path:
+    """Возвращает первый доступный tahoma.ttf или бросает FontExtendError."""
+    if explicit is not None:
+        path = Path(explicit).expanduser()
+        if path.is_file():
+            return path.resolve()
+        raise FontExtendError(f"Tahoma не найден: {path}")
+
+    for path in _tahoma_search_paths():
+        if path.is_file():
+            return path.resolve()
+
+    checked = "\n".join(f"  • {p}" for p in _tahoma_search_paths())
+    fonts_dir = _MODULE_DIR / "fonts"
+    raise FontExtendError(
+        "Tahoma не найден. Скопируйте tahoma.ttf из C:\\Windows\\Fonts "
+        f"в {fonts_dir} или задайте TAHOMA_TTF в .env.\n"
+        f"Проверенные пути:\n{checked}"
+    )
 
 
 @dataclass(frozen=True)
@@ -702,8 +771,7 @@ def _build_extended_font_compact(
     sacrifice: str | None = None,
 ) -> tuple[bytes, bytes, list, dict[str, str], list[tuple[int, int]], dict[str, str]]:
     """Расширяет subset in-place: свободные слоты, жертвы, минимальный append."""
-    if not tahoma_path.is_file():
-        raise FontExtendError(f"Tahoma не найден: {tahoma_path}")
+    tahoma_path = resolve_tahoma_path(tahoma_path)
 
     src_font = TTFont(tahoma_path)
     src_cmap = src_font.getBestCmap() or {}
@@ -929,8 +997,7 @@ def _build_extended_font(
     chars: set[str],
     tahoma_path: Path,
 ) -> tuple[bytes, bytes, list, dict[str, str], list[tuple[int, int]]]:
-    if not tahoma_path.is_file():
-        raise FontExtendError(f"Tahoma не найден: {tahoma_path}")
+    tahoma_path = resolve_tahoma_path(tahoma_path)
 
     src_font = TTFont(tahoma_path)
     src_cmap = src_font.getBestCmap() or {}
@@ -1029,12 +1096,13 @@ def extend_font_in_pdf_bytes(
     *,
     chars: set[str] | None = None,
     full_charset: bool = False,
-    tahoma_path: Path = DEFAULT_TAHOMA,
+    tahoma_path: Path | None = None,
 ) -> FontExtendResult:
     """
     Дополняет subset-шрифт PDF недостающими символами из Tahoma.
     Меняет data in-place (размер файла может измениться).
     """
+    tahoma_path = resolve_tahoma_path(tahoma_path)
     _require_pypdf()
     parts = _extract_font_parts(pdf_path)
     unicode_to_cid = parts["unicode_to_cid"]
@@ -1126,13 +1194,14 @@ def extend_font_compact_in_pdf_bytes(
     pdf_path: Path,
     *,
     chars: set[str] | None = None,
-    tahoma_path: Path = DEFAULT_TAHOMA,
+    tahoma_path: Path | None = None,
     relocatable: str | None = None,
 ) -> FontExtendResult:
     """
     Компактное расширение: полная кириллица, минимальный рост FontFile2.
     При target_size подгоняет итоговый PDF к этому размеру (для pdf 58).
     """
+    tahoma_path = resolve_tahoma_path(tahoma_path)
     _require_pypdf()
     src = Path(pdf_path)
     parts = _extract_font_parts(src)
