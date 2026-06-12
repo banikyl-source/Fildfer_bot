@@ -833,6 +833,25 @@ def recompress_to_size(dec: bytes, target: int) -> bytes | None:
     return None
 
 
+def recompress_patched_stream(
+    dec: bytes,
+    target: int,
+    *,
+    max_growth: int = 8,
+) -> tuple[bytes, int] | None:
+    """
+    Сжимает патченный content stream, допуская небольшой рост.
+
+    После замены нескольких CID-полей zlib часто не попадает в исходные
+    794 байта; ближайший размер (799 и т.п.) даёт PDF +5 байт — бот принимает.
+    """
+    for size in range(target, target + max_growth + 1):
+        found = recompress_to_size(dec, size)
+        if found is not None:
+            return found, size
+    return None
+
+
 def _update_stream_length(data: bytearray, before_stream: int, new_len: int) -> None:
     window = data[max(0, before_stream - 400) : before_stream]
     matches = list(re.finditer(rb"/Length\s+(\d+)", window))
@@ -939,12 +958,16 @@ def patch_cid_zlib_streams_multi(
             continue
 
         hits += stream_hits
-        new_stream = recompress_to_size(new_dec, len(stream_raw))
-        if new_stream is None:
+        patched = recompress_patched_stream(new_dec, len(stream_raw))
+        if patched is None:
             new_stream = zlib.compress(new_dec, 9)
             mode = "length_xref"
-        elif mode != "length_xref":
-            mode = "in_place"
+        else:
+            new_stream, new_len = patched
+            if new_len != len(stream_raw):
+                mode = "length_xref"
+            elif mode != "length_xref":
+                mode = "in_place"
 
         before_stream = len(out) + len(header)
         patch_info = (before_stream, len(stream_raw), len(new_stream))
