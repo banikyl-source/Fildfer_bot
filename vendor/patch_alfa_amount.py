@@ -1057,10 +1057,17 @@ def _ensure_needed_chars(
     if card_template and missing <= set(RECEIPT_DIGITS):
         from font_extend import repair_card_digits_in_pdf_bytes
 
+        font_donor: Path | None = None
+        try:
+            font_donor = resolve_canonical_card_font_donor()
+        except AmountPatchError:
+            font_donor = None
+
         result = repair_card_digits_in_pdf_bytes(
             data,
             pdf_path,
             digits=digit_missing,
+            font_donor=font_donor,
             target_size=len(data),
         )
         if not result.extended:
@@ -1504,8 +1511,10 @@ DEFAULT_CARD_INPUT = Path(r"C:\Users\Жопсик\Desktop\PDF Document.pdf")
 DEFAULT_CARD_FULLFONT = Path(r"C:\Users\Жопсик\Desktop\alfa_card_fullfont.pdf")
 DEFAULT_ACCOUNT_INPUT = Path(r"d:\Загрузки\PDF.pdf")
 # Оригинал карта→карта: subset 48 символов, FontFile2 ≈ 17584 байт.
-# MD5 проходящего чека PDF Document.pdf — onlypdf_robot сверяет отпечаток.
-CARD_BOT_PASS_FONT_FILE2_MD5 = "8a195e510542600023beb25b994cfa4d"
+# MD5 FontFile2 шаблона с in-place цифрой «8» (PROHOD_CARD_FIXED1 после --fix-card-template).
+CARD_BOT_PASS_FONT_FILE2_MD5 = "068671420ef3923487d79b316587724a"
+# MD5 оригинала PDF Document.pdf (без «8» в subset).
+CARD_ORIGINAL_FONT_FILE2_MD5 = "8a195e510542600023beb25b994cfa4d"
 CARD_BOT_SAFE_FONT_MARKER = "MIYPCA"
 CARD_BOT_SAFE_CMAP_MAX = 52
 CARD_BOT_SAFE_FONT_FILE2_MAX = 18_000
@@ -1591,54 +1600,65 @@ def repair_card_template_digits(
     output_pdf: str | Path | None = None,
 ) -> Path:
     """
-    Добавляет в subset карта→карта недостающие цифры 0–9.
+    Добавляет в subset карта→карта недостающие цифры 0–9 и чинит глиф «8».
 
-    Оригинальный PDF Document.pdf не содержит «8» (в сумме шаблона её не было).
+    Оригинальный PDF Document.pdf не содержит «8»; CMap-only даёт «C» вместо «8»
+    визуально — здесь перезаписываем глиф in-place из Tahoma.
     """
     src = Path(input_pdf)
     if not src.is_file():
         raise AmountPatchError(f"Файл не найден: {src}")
+    from font_extend import (
+        _extract_font_parts,
+        digits_with_borrowed_c_glyph,
+        fit_pdf_to_target,
+        preexpand_card_patch_stream,
+        repair_card_digits_in_pdf_bytes,
+    )
+
     cmap = load_unicode_to_cid(src)
+    parts = _extract_font_parts(src)
     missing = missing_receipt_digits(cmap)
-    if not missing:
+    broken = digits_with_borrowed_c_glyph(parts)
+    if not missing and not broken:
         return src
 
     dst = Path(output_pdf) if output_pdf else src
     data = bytearray(src.read_bytes())
     original_size = len(data)
     original_ff2 = card_font_file2_size(src)
-    from font_extend import (
-        fit_pdf_to_target,
-        preexpand_card_patch_stream,
-        repair_card_digits_in_pdf_bytes,
-    )
+    fix_digits = set(missing) | set(broken)
+
+    font_donor: Path | None = None
+    try:
+        font_donor = resolve_canonical_card_font_donor()
+    except AmountPatchError:
+        font_donor = None
 
     result = repair_card_digits_in_pdf_bytes(
         data,
         src,
-        digits=set(missing),
+        digits=fix_digits,
+        font_donor=font_donor,
         target_size=original_size,
     )
     if not result.extended:
-        shown = ", ".join(repr(ch) for ch in missing)
+        shown = ", ".join(repr(ch) for ch in sorted(fix_digits, key=ord))
         raise AmountPatchError(
             f"Не удалось добавить цифры in-place в шаблон {src.name}: {shown}"
         )
     if not preexpand_card_patch_stream(data):
-        raise AmountPatchError(
-            f"Не удалось предрасширить поток полей в {src.name} — "
-            "размер чека после патча может не совпасть с шаблоном."
-        )
+        if not fit_pdf_to_target(data, original_size):
+            raise AmountPatchError(
+                f"Не удалось подогнать размер {src.name} к {original_size} байт после "
+                "починки цифр — бот может не распознать чек."
+            )
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_bytes(data)
 
-    src_ff2_md5 = card_font_file2_md5(src)
-    if card_font_file2_md5(dst) != src_ff2_md5:
+    if card_font_file2_size(dst) != original_ff2:
         raise AmountPatchError(
-            "FontFile2 изменился после починки цифр — onlypdf_robot не распознает чек.\n"
-            f"  было: {src_ff2_md5}\n"
-            f"  стало: {card_font_file2_md5(dst)}\n"
-            "Нужна CMap-only починка (без перезаписи глифов)."
+            f"FontFile2 изменил размер ({original_ff2} → {card_font_file2_size(dst)} байт)."
         )
 
     new_cmap = load_unicode_to_cid(dst)
@@ -1656,6 +1676,14 @@ def repair_card_template_digits(
             f"глифов {card_font_glyph_count(dst)}, было {original_ff2} байт).\n"
             "onlypdf_robot сверяет отпечаток шрифта — нужен in-place subset как в PDF Document.pdf."
         )
+    if has_all_receipt_digits(new_cmap):
+        out_md5 = card_font_file2_md5(dst)
+        if out_md5 != CARD_BOT_PASS_FONT_FILE2_MD5:
+            raise AmountPatchError(
+                f"FontFile2 MD5 {out_md5} не совпадает с bot-pass "
+                f"{CARD_BOT_PASS_FONT_FILE2_MD5}.\n"
+                "Используйте эталонный PROHOD_CARD_FIXED1.pdf как донор шрифта."
+            )
     return dst
 
 
@@ -2033,6 +2061,44 @@ def card_font_file2_md5(pdf_path: str | Path) -> str:
     return hashlib.md5(ff).hexdigest()
 
 
+def resolve_canonical_card_font_donor() -> Path:
+    """
+    Эталон PROHOD_CARD_FIXED1: bot-pass MD5 FontFile2 и настоящая восьмёрка.
+
+    In-place починка из Tahoma каждый раз даёт новый MD5 — бот пишет
+    «чек не распознан»; копируем FontFile2 только с этого шаблона.
+    """
+    from font_extend import _extract_font_parts, digits_with_borrowed_c_glyph
+
+    root = Path(__file__).resolve().parent
+    candidates = (
+        root / "Fildfer_bot3-main" / "templates" / "PROHOD_CARD_FIXED1.pdf",
+        root / "templates" / "PROHOD_CARD_FIXED1.pdf",
+        DEFAULT_CARD_INPUT.parent / "PROHOD_CARD_FIXED1.pdf",
+    )
+    seen: set[Path] = set()
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        resolved = candidate.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if card_font_file2_md5(candidate) != CARD_BOT_PASS_FONT_FILE2_MD5:
+            continue
+        if digits_with_borrowed_c_glyph(_extract_font_parts(candidate)):
+            continue
+        if missing_receipt_digits(load_unicode_to_cid(candidate)):
+            continue
+        return candidate
+    raise AmountPatchError(
+        "Не найден эталонный PROHOD_CARD_FIXED1.pdf (bot-pass FontFile2).\n"
+        "Положите готовый шаблон в Fildfer_bot3-main/templates/ или соберите:\n"
+        "  python patch_alfa_amount.py PDF\\ Document.pdf --fix-card-template "
+        "-o Fildfer_bot3-main/templates/PROHOD_CARD_FIXED1.pdf"
+    )
+
+
 def _card_template_repair_dest(template: Path) -> Path:
     for candidate in (
         template.parent / "PROHOD_CARD_FIXED1.pdf",
@@ -2062,7 +2128,11 @@ def ensure_card_template_for_values(
     """
     template = resolve_card_bot_pass_template(template)
     cmap = load_unicode_to_cid(template)
-    if not missing_receipt_digits(cmap):
+    from font_extend import _extract_font_parts, digits_with_borrowed_c_glyph
+
+    parts = _extract_font_parts(template)
+    broken = digits_with_borrowed_c_glyph(parts)
+    if not missing_receipt_digits(cmap) and not broken:
         return template
 
     discovered = discover_fields(template, template="card")
@@ -2073,7 +2143,8 @@ def ensure_card_template_for_values(
         needed.update(format_field_value(field_id, value, discovered[field_id].text))
     still_needed = chars_needing_font_extension(needed, cmap)
     digit_missing = {ch for ch in still_needed if ch in RECEIPT_DIGITS}
-    if not digit_missing:
+    digit_broken = {ch for ch in broken if ch in needed}
+    if not digit_missing and not digit_broken:
         return template
 
     non_digit = still_needed - digit_missing
@@ -2087,10 +2158,12 @@ def ensure_card_template_for_values(
     dst = output or _card_template_repair_dest(template)
     if dst.is_file() and dst.resolve() != template.resolve():
         dst_cmap = load_unicode_to_cid(dst)
+        dst_parts = _extract_font_parts(dst)
         if (
             is_card_bot_safe_template(dst)
             and not missing_receipt_digits(dst_cmap)
-            and all(ch in dst_cmap for ch in digit_missing)
+            and not digits_with_borrowed_c_glyph(dst_parts)
+            and all(ch in dst_cmap for ch in digit_missing | digit_broken)
         ):
             return dst
 
@@ -2114,6 +2187,14 @@ def is_card_bot_safe_template(pdf_path: str | Path) -> bool:
             return False
         if card_font_glyph_count(src) != CARD_BOT_SAFE_GLYPH_COUNT:
             return False
+        from font_extend import _extract_font_parts, digits_with_borrowed_c_glyph
+
+        cmap = load_unicode_to_cid(src)
+        if digits_with_borrowed_c_glyph(_extract_font_parts(src)):
+            return False
+        if has_all_receipt_digits(cmap):
+            if card_font_file2_md5(src) != CARD_BOT_PASS_FONT_FILE2_MD5:
+                return False
     except Exception:
         return False
     return True
@@ -2153,6 +2234,8 @@ def validate_card_bot_safe_patch(
     src = resolve_card_bot_pass_template(Path(pdf_path))
     discovered = discover_fields(src, template="card")
     cmap = load_unicode_to_cid(src)
+    from font_extend import _extract_font_parts, digits_with_borrowed_c_glyph
+
     needed: set[str] = set()
     field_problems: list[str] = []
     length_problems: list[str] = []
@@ -2181,6 +2264,20 @@ def validate_card_bot_safe_patch(
             )
 
     missing = chars_needing_font_extension(needed, cmap)
+    broken = digits_with_borrowed_c_glyph(_extract_font_parts(src))
+    broken_needed = sorted(
+        {ch for ch in broken if ch in needed and ch in RECEIPT_DIGITS},
+        key=ord,
+    )
+    if broken_needed:
+        shown = ", ".join(repr(ch) for ch in broken_needed)
+        raise AmountPatchError(
+            f"Карта→карта: цифры с контуром «C» вместо глифа: {shown}.\n"
+            "CMap-only даёт «8» при копировании, но на экране «C».\n"
+            "Пересоберите шаблон:\n"
+            "  python patch_alfa_amount.py PDF\\ Document.pdf --fix-card-template "
+            "-o Fildfer_bot3-main/templates/PROHOD_CARD_FIXED1.pdf"
+        )
     if missing:
         shown = ", ".join(repr(ch) for ch in sorted(missing, key=ord))
         details = "\n".join(field_problems) if field_problems else ""
@@ -2495,8 +2592,8 @@ def main() -> int:
         "--fix-card-template",
         action="store_true",
         help=(
-            "Добавить недостающие цифры 0–9 в шаблон карта→карта "
-            "(PDF Document.pdf не содержит «8»)"
+            "Добавить недостающие цифры 0–9 и починить глиф «8» в шаблоне карта→карта "
+            "(CMap-only рисует «C» вместо «8» — здесь in-place из Tahoma)"
         ),
     )
     parser.add_argument(

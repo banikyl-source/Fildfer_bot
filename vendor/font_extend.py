@@ -999,48 +999,193 @@ def map_card_digits_cmap_only_in_pdf_bytes(
     return FontExtendResult(True, tuple(added), verify_map)
 
 
+def _latin_c_glyph_slot(parts: dict) -> int | None:
+    cid_hex = parts["unicode_to_cid"].get("C")
+    if not cid_hex:
+        return None
+    return int(cid_hex, 16)
+
+
+def digits_with_borrowed_c_glyph(parts: dict) -> tuple[str, ...]:
+    """
+    Цифры, чей слот в FontFile2 рисует тот же контур, что и латинская «C».
+
+    CMap-only добавляет «8» в ToUnicode (копия проходит бота), но глиф 0030
+    остаётся буквой C — визуально «C», при копировании «8».
+    """
+    c_slot = _latin_c_glyph_slot(parts)
+    if c_slot is None:
+        return ()
+    dst_font = TTFont(BytesIO(parts["font_dec"]))
+    glyf = dst_font["glyf"]
+    order = dst_font.getGlyphOrder()
+    if c_slot >= len(order):
+        return ()
+    c_glyph = glyf[order[c_slot]]
+    broken: list[str] = []
+    for digit in "0123456789":
+        cid_hex = parts["unicode_to_cid"].get(digit)
+        if not cid_hex:
+            continue
+        slot = int(cid_hex, 16)
+        if slot == c_slot:
+            broken.append(digit)
+            continue
+        if slot < len(order) and glyf[order[slot]] == c_glyph:
+            broken.append(digit)
+    return tuple(broken)
+
+
+def copy_card_font_from_donor_pdf_bytes(
+    data: bytearray,
+    pdf_path: Path,
+    donor_pdf: Path,
+    *,
+    digits: set[str] | None = None,
+    target_size: int | None = None,
+) -> FontExtendResult:
+    """
+    Подменяет FontFile2/ToUnicode/W на bot-pass донор (PROHOD_CARD_FIXED1).
+
+    CMap-only и повторная in-place починка из Tahoma дают другой MD5 FontFile2;
+    onlypdf_robot принимает только эталонный отпечаток с настоящей восьмёркой.
+    """
+    _require_pypdf()
+    src = Path(pdf_path)
+    donor = Path(donor_pdf)
+    if not donor.is_file():
+        raise FontExtendError(f"Донор шрифта не найден: {donor}")
+
+    parts = _extract_font_parts(src)
+    donor_parts = _extract_font_parts(donor)
+    unicode_to_cid = parts["unicode_to_cid"]
+    scope = set(digits or "0123456789")
+    missing = {
+        ch
+        for ch in chars_needing_font_extension(scope, unicode_to_cid)
+        if ch in "0123456789"
+    }
+    broken = {ch for ch in digits_with_borrowed_c_glyph(parts) if ch in scope}
+    to_fix = missing | broken
+    if not to_fix:
+        return FontExtendResult(False, (), unicode_to_cid)
+
+    donor_broken = digits_with_borrowed_c_glyph(donor_parts)
+    if donor_broken:
+        raise FontExtendError(
+            f"Донор {donor.name}: цифры с контуром «C»: "
+            f"{', '.join(repr(ch) for ch in donor_broken)}"
+        )
+
+    donor_cmap = donor_parts["unicode_to_cid"]
+    donor_missing = sorted((ch for ch in to_fix if ch not in donor_cmap), key=ord)
+    if donor_missing:
+        shown = ", ".join(repr(ch) for ch in donor_missing)
+        raise FontExtendError(f"В доноре {donor.name} нет цифр: {shown}")
+
+    for ch, cid in unicode_to_cid.items():
+        if ch in donor_cmap and donor_cmap[ch].upper() != cid.upper():
+            raise FontExtendError(
+                f"CMap расходится для {ch!r}: PDF={cid} донор={donor_cmap[ch]}"
+            )
+
+    _patch_font_streams_in_bytes(
+        data,
+        parts,
+        new_ff_dec=donor_parts["font_dec"],
+        new_tu_dec=donor_parts["tu_dec"],
+        new_w_list=list(donor_parts["w_list"]),
+    )
+
+    if target_size is not None:
+        fit_pdf_to_target(data, target_size)
+
+    try:
+        verify_map = _load_unicode_to_cid_from_bytes(bytes(data))
+    except FontExtendError:
+        if not repair_tounicode_in_bytes(data):
+            raise FontExtendError(
+                "Не удалось восстановить /ToUnicode после подмены шрифта"
+            ) from None
+        verify_map = _load_unicode_to_cid_from_bytes(bytes(data))
+
+    after_parts = _extract_font_parts_from_bytes(bytes(data))
+    still_broken = {
+        ch for ch in digits_with_borrowed_c_glyph(after_parts) if ch in scope
+    }
+    if still_broken:
+        shown = ", ".join(repr(ch) for ch in sorted(still_broken, key=ord))
+        raise FontExtendError(f"После подмены шрифта остались битые цифры: {shown}")
+
+    added = tuple(sorted(missing, key=ord))
+    return FontExtendResult(True, added, verify_map)
+
+
 def repair_card_digits_in_pdf_bytes(
     data: bytearray,
     pdf_path: Path,
     *,
     digits: set[str] | None = None,
     tahoma_path: Path | None = None,
+    font_donor: Path | None = None,
     target_size: int | None = None,
 ) -> FontExtendResult:
     """
-    Добавляет цифры в subset карта→карта через ToUnicode (FontFile2 не меняется).
+    Добавляет недостающие цифры и чинит глиф «8».
+
+    Предпочитает эталонный bot-pass донор (стабильный MD5 FontFile2).
+    Без донора — in-place из Tahoma (MD5 может не совпасть с onlypdf_robot).
     """
     _require_pypdf()
     src = Path(pdf_path)
     parts = _extract_font_parts(src)
     unicode_to_cid = parts["unicode_to_cid"]
-    need = sorted(
-        chars_needing_font_extension(set(digits or ()), unicode_to_cid),
-        key=ord,
-    )
-    need = [ch for ch in need if ch in "0123456789"]
-    if not need:
+    scope = set(digits or "0123456789")
+    missing = {
+        ch
+        for ch in chars_needing_font_extension(scope, unicode_to_cid)
+        if ch in "0123456789"
+    }
+    broken = {ch for ch in digits_with_borrowed_c_glyph(parts) if ch in scope}
+    to_fix = sorted(missing | broken, key=ord)
+    if not to_fix:
         return FontExtendResult(False, (), unicode_to_cid)
 
-    cmap_result = map_card_digits_cmap_only_in_pdf_bytes(
-        data,
-        pdf_path,
-        digits=set(need),
-        target_size=target_size,
-    )
-    if cmap_result.extended:
-        still = chars_needing_font_extension(set(need), cmap_result.cmap)
-        if not still:
-            return cmap_result
-        raise FontExtendError(
-            f"CMap-only не добавил цифры: {still!r}. "
-            "Перезапись глифов ломает MD5 FontFile2 для onlypdf_robot."
+    if font_donor is not None:
+        return copy_card_font_from_donor_pdf_bytes(
+            data,
+            src,
+            font_donor,
+            digits=scope,
+            target_size=target_size,
         )
 
-    raise FontExtendError(
-        "CMap-only починка цифр не сработала; перезапись глифов запрещена "
-        "(onlypdf_robot сверяет MD5 FontFile2)."
+    new_ff_dec, new_tu_dec, new_w_list, new_map, added = _build_card_digits_in_place(
+        parts,
+        to_fix,
+        tahoma_path or resolve_tahoma_path(None),
     )
+    _patch_font_streams_in_bytes(
+        data,
+        parts,
+        new_ff_dec=new_ff_dec,
+        new_tu_dec=new_tu_dec,
+        new_w_list=new_w_list,
+    )
+
+    if target_size is not None:
+        fit_pdf_to_target(data, target_size)
+
+    try:
+        verify_map = _load_unicode_to_cid_from_bytes(bytes(data))
+    except FontExtendError:
+        if not repair_tounicode_in_bytes(data):
+            raise FontExtendError(
+                "Не удалось восстановить /ToUnicode после in-place цифр"
+            ) from None
+        verify_map = _load_unicode_to_cid_from_bytes(bytes(data))
+
+    return FontExtendResult(True, tuple(added), verify_map)
 
 
 def _build_extended_font_compact(
