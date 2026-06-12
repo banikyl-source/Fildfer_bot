@@ -336,8 +336,10 @@ def _render_alfa_pdf(
         AmountPatchError,
         CARD_BOT_SAFE_FONT_FILE2_EXACT,
         CARD_BOT_SAFE_GLYPH_COUNT,
+        card_font_file2_md5,
         card_font_file2_size,
         card_font_glyph_count,
+        ensure_card_template_for_values,
         replace_fields_in_pdf,
         resolve_account_bot_pass_template,
         resolve_card_bot_pass_template,
@@ -355,6 +357,7 @@ def _render_alfa_pdf(
         template = find_alfa_card_template()
         patch_values = build_patch_values(bot_values, card=True)
         template = resolve_card_bot_pass_template(template)
+        template = ensure_card_template_for_values(template, patch_values)
         validate_card_bot_safe_patch(template, patch_values)
         receipt_template = "card"
     else:
@@ -363,6 +366,7 @@ def _render_alfa_pdf(
         receipt_template = None
 
     template_size = template.stat().st_size
+    template_ff2_md5 = card_font_file2_md5(template) if card else None
 
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
         out_path = Path(tmp.name)
@@ -403,6 +407,12 @@ def _render_alfa_pdf(
                     f"FontFile2 изменился ({out_ff2} байт, {out_glyphs} глифов). "
                     f"Нужно {expected_ff2} байт и {expected_glyphs} глифов ({kind}) — "
                     "бот пишет «чек не распознан»."
+                )
+            if template_ff2_md5 and card_font_file2_md5(out_path) != template_ff2_md5:
+                raise AmountPatchError(
+                    "Отпечаток FontFile2 не совпадает с шаблоном — "
+                    "бот пишет «чек не распознан». "
+                    "Пересоберите PROHOD_CARD_FIXED1.pdf (--fix-card-template)."
                 )
         return out_path.read_bytes()
     except AmountPatchError as exc:

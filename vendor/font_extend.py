@@ -773,6 +773,9 @@ _CARD_COMPONENT_PARENT_SLOT = {
     54: 30,
     55: 35,
 }
+# Свободные component-слоты subset карта→карта: только ToUnicode, FontFile2 не трогаем.
+# onlypdf_robot сверяет MD5 FontFile2 с оригиналом PDF Document.pdf.
+_CARD_DIGIT_CMAP_SLOT_POOL = tuple(_CARD_COMPONENT_PARENT_SLOT)
 
 
 def _char_for_cid_slot(unicode_to_cid: dict[str, str], slot: int) -> str:
@@ -809,6 +812,24 @@ def _build_card_digits_in_place(
         digit_code = ord(digit)
         if digit_code not in src_cmap:
             raise FontExtendError(f"Цифра {digit!r} отсутствует в Tahoma")
+
+        parent_slot = _CARD_COMPONENT_PARENT_SLOT.get(comp_slot)
+        if parent_slot is not None:
+            parent_char = _char_for_cid_slot(unicode_to_cid, parent_slot)
+            parent_code = ord(parent_char)
+            if parent_code not in src_cmap:
+                raise FontExtendError(
+                    f"Родительский символ {parent_char!r} (слот {parent_slot:04X}) "
+                    f"отсутствует в Tahoma"
+                )
+            parent_aw = _overwrite_slot(
+                dst_font, src_font, parent_slot, src_cmap[parent_code]
+            )
+            _ensure_w_entry(
+                w_list,
+                parent_slot,
+                _pdf_glyph_width(dst_font, w_list, parent_aw),
+            )
 
         digit_aw = _overwrite_slot(
             dst_font, src_font, comp_slot, src_cmap[digit_code]
@@ -909,6 +930,75 @@ def preexpand_card_patch_stream(
     return False
 
 
+def map_card_digits_cmap_only_in_pdf_bytes(
+    data: bytearray,
+    pdf_path: Path,
+    *,
+    digits: set[str] | None = None,
+    target_size: int | None = None,
+) -> FontExtendResult:
+    """
+    Добавляет цифры 0–9 в ToUnicode, привязывая к свободным component-слотам.
+
+    FontFile2 не меняется — onlypdf_robot сверяет его MD5 с оригиналом
+    PDF Document.pdf; перезапись глифов (--fix-card-template старым способом)
+    ломает «чек не распознан».
+    """
+    _require_pypdf()
+    src = Path(pdf_path)
+    parts = _extract_font_parts(src)
+    unicode_to_cid = dict(parts["unicode_to_cid"])
+    ff2_before = parts["font_dec"]
+    need = sorted(
+        chars_needing_font_extension(set(digits or ()), unicode_to_cid),
+        key=ord,
+    )
+    need = [ch for ch in need if ch in "0123456789"]
+    if not need:
+        return FontExtendResult(False, (), unicode_to_cid)
+
+    used_slots = {int(cid, 16) for cid in unicode_to_cid.values()}
+    pool = [slot for slot in _CARD_DIGIT_CMAP_SLOT_POOL if slot not in used_slots]
+    if len(need) > len(pool):
+        raise FontExtendError(
+            "Слишком много недостающих цифр для CMap-only починки карта→карта: "
+            f"{need!r} (свободных слотов: {len(pool)})"
+        )
+
+    added: list[str] = []
+    for digit in need:
+        slot = pool.pop(0)
+        unicode_to_cid[digit] = f"{slot:04X}"
+        added.append(digit)
+
+    new_tu_dec = _rebuild_cmap_bfchar(parts["tu_dec"], unicode_to_cid)
+    file_data = bytes(data)
+    tu_span = _find_stream_span(file_data, parts["tu_dec"])
+    if not tu_span:
+        raise FontExtendError("ToUnicode stream не найден в PDF")
+    _patch_stream_span(data, tu_span, _compress_like_pdf(new_tu_dec))
+
+    parts_after = _extract_font_parts_from_bytes(bytes(data))
+    if parts_after["font_dec"] != ff2_before:
+        raise FontExtendError(
+            "FontFile2 изменился после CMap-only починки цифр — откат невозможен"
+        )
+
+    if target_size is not None:
+        fit_pdf_to_target(data, target_size)
+
+    try:
+        verify_map = _load_unicode_to_cid_from_bytes(bytes(data))
+    except FontExtendError:
+        if not repair_tounicode_in_bytes(data):
+            raise FontExtendError(
+                "Не удалось восстановить /ToUnicode после CMap-only цифр"
+            ) from None
+        verify_map = _load_unicode_to_cid_from_bytes(bytes(data))
+
+    return FontExtendResult(True, tuple(added), verify_map)
+
+
 def repair_card_digits_in_pdf_bytes(
     data: bytearray,
     pdf_path: Path,
@@ -918,10 +1008,8 @@ def repair_card_digits_in_pdf_bytes(
     target_size: int | None = None,
 ) -> FontExtendResult:
     """
-    In-place добавление цифр в subset карта→карта без роста FontFile2.
-    onlypdf_robot сверяет отпечаток шрифта — append ломает «чек не распознан».
+    Добавляет цифры в subset карта→карта через ToUnicode (FontFile2 не меняется).
     """
-    tahoma_path = resolve_tahoma_path(tahoma_path)
     _require_pypdf()
     src = Path(pdf_path)
     parts = _extract_font_parts(src)
@@ -934,29 +1022,25 @@ def repair_card_digits_in_pdf_bytes(
     if not need:
         return FontExtendResult(False, (), unicode_to_cid)
 
-    new_ff_dec, new_tu_dec, new_w_list, new_map, added = _build_card_digits_in_place(
-        parts, need, tahoma_path
-    )
-    _patch_font_streams_in_bytes(
+    cmap_result = map_card_digits_cmap_only_in_pdf_bytes(
         data,
-        parts,
-        new_ff_dec=new_ff_dec,
-        new_tu_dec=new_tu_dec,
-        new_w_list=new_w_list,
+        pdf_path,
+        digits=set(need),
+        target_size=target_size,
     )
-    try:
-        verify_map = _load_unicode_to_cid_from_bytes(bytes(data))
-    except FontExtendError:
-        if not repair_tounicode_in_bytes(data):
-            raise FontExtendError(
-                "Не удалось восстановить /ToUnicode после in-place цифр"
-            ) from None
-        verify_map = _load_unicode_to_cid_from_bytes(bytes(data))
+    if cmap_result.extended:
+        still = chars_needing_font_extension(set(need), cmap_result.cmap)
+        if not still:
+            return cmap_result
+        raise FontExtendError(
+            f"CMap-only не добавил цифры: {still!r}. "
+            "Перезапись глифов ломает MD5 FontFile2 для onlypdf_robot."
+        )
 
-    if target_size is not None:
-        fit_pdf_to_target(data, target_size)
-
-    return FontExtendResult(True, tuple(added), verify_map)
+    raise FontExtendError(
+        "CMap-only починка цифр не сработала; перезапись глифов запрещена "
+        "(onlypdf_robot сверяет MD5 FontFile2)."
+    )
 
 
 def _build_extended_font_compact(

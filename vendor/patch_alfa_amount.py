@@ -1044,6 +1044,7 @@ def _ensure_needed_chars(
     needed: set[str],
     *,
     extend_font: bool,
+    receipt_template: str | None = None,
 ) -> tuple[dict[str, str], bool, tuple[str, ...]]:
     cmap = load_unicode_to_cid(pdf_path)
     if not extend_font:
@@ -1051,6 +1052,42 @@ def _ensure_needed_chars(
     missing = chars_needing_font_extension(needed, cmap)
     if not missing:
         return cmap, False, ()
+    card_template = receipt_template == "card" or is_card_bot_safe_template(pdf_path)
+    digit_missing = {ch for ch in missing if ch in RECEIPT_DIGITS}
+    if card_template and missing <= set(RECEIPT_DIGITS):
+        from font_extend import repair_card_digits_in_pdf_bytes
+
+        result = repair_card_digits_in_pdf_bytes(
+            data,
+            pdf_path,
+            digits=digit_missing,
+            target_size=len(data),
+        )
+        if not result.extended:
+            shown = ", ".join(repr(ch) for ch in sorted(digit_missing, key=ord))
+            raise AmountPatchError(
+                f"Карта→карта: не удалось добавить цифры in-place: {shown}.\n"
+                "Соберите шаблон:\n"
+                "  python patch_alfa_amount.py PDF Document.pdf --fix-card-template "
+                "-o PROHOD_CARD_FIXED1.pdf"
+            )
+        still = chars_needing_font_extension(needed, result.cmap)
+        if still:
+            shown = ", ".join(repr(ch) for ch in sorted(still, key=ord))
+            raise AmountPatchError(
+                f"Карта→карта: после in-place починки всё ещё нет символов: {shown}"
+            )
+        return result.cmap, True, result.added_chars
+    if card_template and digit_missing:
+        shown = ", ".join(repr(ch) for ch in sorted(digit_missing, key=ord))
+        raise AmountPatchError(
+            f"Карта→карта: в subset нет цифр {shown}.\n"
+            "Нельзя расширять шрифт append-ом — бот пишет «чек не распознан».\n"
+            "Соберите шаблон:\n"
+            "  python patch_alfa_amount.py PDF Document.pdf --fix-card-template "
+            "-o PROHOD_CARD_FIXED1.pdf\n"
+            "и патчите с --no-extend-font."
+        )
     from font_extend import ensure_chars_in_pdf
 
     result = ensure_chars_in_pdf(data, pdf_path, needed, full_cyrillic=True)
@@ -1182,7 +1219,16 @@ def replace_fields_in_pdf(
         needed_chars.update(new_text)
 
     cmap, font_extended, added_chars = _ensure_needed_chars(
-        original, src, needed_chars, extend_font=extend_font
+        original,
+        src,
+        needed_chars,
+        extend_font=extend_font,
+        receipt_template=receipt_template,
+    )
+    src_ff2_md5 = (
+        card_font_file2_md5(src)
+        if receipt_template == "card" and is_card_bot_safe_template(src)
+        else None
     )
     if font_extended:
         discovered = discover_fields_in_bytes(bytes(original), cmap)
@@ -1236,6 +1282,23 @@ def replace_fields_in_pdf(
     else:
         fit_pdf_to_target(original, original_size)
     dst.write_bytes(original)
+
+    if src_ff2_md5 is not None:
+        out_ff2_md5 = card_font_file2_md5(dst)
+        if out_ff2_md5 != src_ff2_md5:
+            raise AmountPatchError(
+                "FontFile2 изменился (onlypdf_robot сверяет отпечаток шрифта) — "
+                "бот пишет «чек не распознан».\n"
+                f"  шаблон: {src_ff2_md5}\n"
+                f"  чек:    {out_ff2_md5}\n"
+                "Используйте PROHOD_CARD_FIXED1.pdf (--fix-card-template) "
+                "и патч с --no-extend-font."
+            )
+        if dst.stat().st_size != original_size:
+            raise AmountPatchError(
+                f"Размер PDF изменился ({original_size} → {dst.stat().st_size} байт). "
+                "Бот не распознает чек — нужен шаблон с --fix-card-template."
+            )
 
     if font_swapped:
         validate_bot_critical_cids(dst)
@@ -1441,6 +1504,8 @@ DEFAULT_CARD_INPUT = Path(r"C:\Users\Жопсик\Desktop\PDF Document.pdf")
 DEFAULT_CARD_FULLFONT = Path(r"C:\Users\Жопсик\Desktop\alfa_card_fullfont.pdf")
 DEFAULT_ACCOUNT_INPUT = Path(r"d:\Загрузки\PDF.pdf")
 # Оригинал карта→карта: subset 48 символов, FontFile2 ≈ 17584 байт.
+# MD5 проходящего чека PDF Document.pdf — onlypdf_robot сверяет отпечаток.
+CARD_BOT_PASS_FONT_FILE2_MD5 = "8a195e510542600023beb25b994cfa4d"
 CARD_BOT_SAFE_FONT_MARKER = "MIYPCA"
 CARD_BOT_SAFE_CMAP_MAX = 52
 CARD_BOT_SAFE_FONT_FILE2_MAX = 18_000
@@ -1566,6 +1631,15 @@ def repair_card_template_digits(
         )
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_bytes(data)
+
+    src_ff2_md5 = card_font_file2_md5(src)
+    if card_font_file2_md5(dst) != src_ff2_md5:
+        raise AmountPatchError(
+            "FontFile2 изменился после починки цифр — onlypdf_robot не распознает чек.\n"
+            f"  было: {src_ff2_md5}\n"
+            f"  стало: {card_font_file2_md5(dst)}\n"
+            "Нужна CMap-only починка (без перезаписи глифов)."
+        )
 
     new_cmap = load_unicode_to_cid(dst)
     still_missing = missing_receipt_digits(new_cmap)
@@ -1943,6 +2017,84 @@ def card_font_glyph_count(pdf_path: str | Path) -> int:
         .get_data()
     )
     return TTFont(BytesIO(ff))["maxp"].numGlyphs
+
+
+def card_font_file2_md5(pdf_path: str | Path) -> str:
+    """MD5 распакованного FontFile2 — onlypdf_robot сверяет отпечаток шрифта."""
+    import hashlib
+
+    ff = (
+        __import__("pypdf")
+        .PdfReader(str(pdf_path))
+        .pages[0]["/Resources"]["/Font"]["/F1"]["/DescendantFonts"][0]
+        ["/FontDescriptor"]["/FontFile2"]
+        .get_data()
+    )
+    return hashlib.md5(ff).hexdigest()
+
+
+def _card_template_repair_dest(template: Path) -> Path:
+    for candidate in (
+        template.parent / "PROHOD_CARD_FIXED1.pdf",
+        DEFAULT_CARD_INPUT.parent / "PROHOD_CARD_FIXED1.pdf",
+        Path(__file__).resolve().parent
+        / "Fildfer_bot3-main"
+        / "templates"
+        / "PROHOD_CARD_FIXED1.pdf",
+        template.with_name(f"{template.stem}_digits_fixed{template.suffix}"),
+    ):
+        if candidate.resolve() != template.resolve():
+            return candidate
+    return template.with_name(f"{template.stem}_digits_fixed{template.suffix}")
+
+
+def ensure_card_template_for_values(
+    template: Path,
+    field_values: dict[str, Any],
+    *,
+    output: Path | None = None,
+) -> Path:
+    """
+    Возвращает шаблон карта→карта с цифрами 0–9 для указанных полей.
+
+    Оригинал PDF Document.pdf не содержит «8» — без in-place починки бот
+    не распознаёт чеки с этой цифрой в сумме.
+    """
+    template = resolve_card_bot_pass_template(template)
+    cmap = load_unicode_to_cid(template)
+    if not missing_receipt_digits(cmap):
+        return template
+
+    discovered = discover_fields(template, template="card")
+    needed: set[str] = set()
+    for field_id, value in field_values.items():
+        if field_id not in discovered:
+            continue
+        needed.update(format_field_value(field_id, value, discovered[field_id].text))
+    still_needed = chars_needing_font_extension(needed, cmap)
+    digit_missing = {ch for ch in still_needed if ch in RECEIPT_DIGITS}
+    if not digit_missing:
+        return template
+
+    non_digit = still_needed - digit_missing
+    if non_digit:
+        shown = ", ".join(repr(ch) for ch in sorted(non_digit, key=ord))
+        raise AmountPatchError(
+            f"Карта→карта: в subset нет символов: {shown}.\n"
+            f"{bot_safe_charset_report(cmap)}"
+        )
+
+    dst = output or _card_template_repair_dest(template)
+    if dst.is_file() and dst.resolve() != template.resolve():
+        dst_cmap = load_unicode_to_cid(dst)
+        if (
+            is_card_bot_safe_template(dst)
+            and not missing_receipt_digits(dst_cmap)
+            and all(ch in dst_cmap for ch in digit_missing)
+        ):
+            return dst
+
+    return repair_card_template_digits(template, dst)
 
 
 def is_card_bot_safe_template(pdf_path: str | Path) -> bool:
@@ -2484,7 +2636,6 @@ def main() -> int:
             in (
                 DEFAULT_INPUT.resolve(),
                 DEFAULT_BOT_SAFE_INPUT.resolve(),
-                DEFAULT_CARD_INPUT.resolve(),
             )
         ):
             args.input = resolve_fullfont_input(args.input)
@@ -2503,6 +2654,14 @@ def main() -> int:
             if not isinstance(from_json, dict):
                 raise AmountPatchError("JSON должен быть объектом {поле: значение}")
             field_values.update(from_json)
+
+        if receipt_template == "card":
+            extend_font = False
+            args.input = resolve_card_bot_pass_template(args.input)
+            args.input = ensure_card_template_for_values(args.input, field_values)
+            validate_card_bot_safe_patch(args.input, field_values)
+        elif args.input.resolve() == DEFAULT_CARD_INPUT.resolve():
+            extend_font = False
 
         if args.bot_safe and not field_values:
             default_json = Path(__file__).with_name("patch_pdf58.json")
@@ -2557,7 +2716,11 @@ def main() -> int:
             prepared_preview.append((field_id, fm, new_text))
 
         cmap, font_extended, added_chars = _ensure_needed_chars(
-            preview_data, args.input, needed_chars, extend_font=extend_font
+            preview_data,
+            args.input,
+            needed_chars,
+            extend_font=extend_font,
+            receipt_template=receipt_template,
         )
         if font_extended:
             print(
