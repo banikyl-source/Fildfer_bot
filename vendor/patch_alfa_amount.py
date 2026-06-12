@@ -1542,7 +1542,11 @@ def repair_card_template_digits(
     data = bytearray(src.read_bytes())
     original_size = len(data)
     original_ff2 = card_font_file2_size(src)
-    from font_extend import fit_pdf_to_target, repair_card_digits_in_pdf_bytes
+    from font_extend import (
+        fit_pdf_to_target,
+        preexpand_card_patch_stream,
+        repair_card_digits_in_pdf_bytes,
+    )
 
     result = repair_card_digits_in_pdf_bytes(
         data,
@@ -1554,6 +1558,11 @@ def repair_card_template_digits(
         shown = ", ".join(repr(ch) for ch in missing)
         raise AmountPatchError(
             f"Не удалось добавить цифры in-place в шаблон {src.name}: {shown}"
+        )
+    if not preexpand_card_patch_stream(data):
+        raise AmountPatchError(
+            f"Не удалось предрасширить поток полей в {src.name} — "
+            "размер чека после патча может не совпасть с шаблоном."
         )
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_bytes(data)
@@ -2027,9 +2036,9 @@ def validate_card_bot_safe_patch(
         if "8" in missing:
             digit_hint = (
                 "\nВ шаблоне PDF Document.pdf нет цифры «8» (в оригинале сумма 1 466 ₽). "
-                "onlypdf_robot сверяет FontFile2/ToUnicode — расширять шрифт нельзя. "
-                "Суммы с «8» не пройдут бота; используйте другую цифру или оригинальный чек банка, "
-                "где «8» уже была в сумме.\n"
+                "Пересоберите шаблон:\n"
+                "  python patch_alfa_amount.py PDF Document.pdf --fix-card-template "
+                "-o templates/PROHOD_CARD_FIXED1.pdf\n"
             )
         raise AmountPatchError(
             f"Карта→карта: в subset нет символов: {shown}.\n"
@@ -2448,7 +2457,7 @@ def main() -> int:
             dst = args.output or src.with_name(f"{src.stem}_digits_fixed{src.suffix}")
             repaired = repair_card_template_digits(src, dst)
             cmap = load_unicode_to_cid(repaired)
-            print(f"Шаблон карта→карта: {repaired}")
+            print(f"Шаблон карта->карта: {repaired}")
             print(f"  шрифт: {pdf_base_font_name(repaired)}")
             print(f"  размер: {repaired.stat().st_size} байт")
             print(f"  цифры: {''.join(c for c in RECEIPT_DIGITS if c in cmap)}")

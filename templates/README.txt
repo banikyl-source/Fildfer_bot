@@ -4,5 +4,8 @@
   PROHOD_CARD_FIXED1.pdf — карта на карту (PDF Document.pdf, ~56 КБ)
   PROHOD_ACCOUNT.pdf     — перевод на счёт в другой банк (PDF.pdf, ~46 КБ, цифры 0–9)
 
-Карта→карта (PDF Document.pdf): в subset нет цифры «8» — суммы с «8» бот не распознаёт.
-Используйте «В другой банк» (PROHOD_ACCOUNT.pdf) — там «8» есть в оригинальном шрифте.
+Карта→карта: PROHOD_CARD_FIXED1.pdf собран из PDF Document.pdf через
+  python patch_alfa_amount.py PDF Document.pdf --fix-card-template -o PROHOD_CARD_FIXED1.pdf
+(добавляет «8» in-place + предрасширяет поток полей). Суммы с «8» проходят бота.
+
+Перевод на счёт: PROHOD_ACCOUNT.pdf — оригинал PDF.pdf (~46 КБ, VQWVIK+Tahoma, цифры 0–9).

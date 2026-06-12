@@ -817,11 +817,19 @@ def _build_card_digits_in_place(
         _ensure_w_entry(w_list, comp_slot, _pdf_glyph_width(dst_font, w_list, digit_aw))
         added.append(digit)
 
-    _strip_font_tables(dst_font)
     out_font = BytesIO()
-    dst_font.save(out_font, reorderTables=True)
+    dst_font.save(out_font, reorderTables=False)
+    new_ff_dec = out_font.getvalue()
+    target_ff_size = len(parts["font_dec"])
+    if len(new_ff_dec) < target_ff_size:
+        new_ff_dec = new_ff_dec + b"\x00" * (target_ff_size - len(new_ff_dec))
+    elif len(new_ff_dec) > target_ff_size:
+        raise FontExtendError(
+            f"FontFile2 после in-place цифр больше шаблона: "
+            f"{len(new_ff_dec)} > {target_ff_size}"
+        )
     new_tu_dec = _rebuild_cmap_bfchar(parts["tu_dec"], unicode_to_cid)
-    return out_font.getvalue(), new_tu_dec, w_list, unicode_to_cid, added
+    return new_ff_dec, new_tu_dec, w_list, unicode_to_cid, added
 
 
 def _patch_font_streams_in_bytes(
@@ -840,7 +848,9 @@ def _patch_font_streams_in_bytes(
         raise FontExtendError("FontFile2 или ToUnicode stream не найден в PDF")
 
     w_start, w_end = _parse_w_span(file_data)
-    new_ff_raw = _compress_like_pdf(new_ff_dec)
+    new_ff_raw = recompress_to_size(new_ff_dec, len(ff_span.raw))
+    if new_ff_raw is None:
+        new_ff_raw = _compress_like_pdf(new_ff_dec)
     tu_flate = _stream_is_flate(tu_span)
     new_tu_raw = _compress_like_pdf(new_tu_dec) if tu_flate else new_tu_dec
     new_w_raw = _format_w_array(new_w_list)
@@ -854,6 +864,49 @@ def _patch_font_streams_in_bytes(
     _patch_stream_span(data, tu_span, new_tu_raw)
     if cid_remap:
         _remap_cids_in_pdf_streams(data, cid_remap)
+
+
+CARD_PATCH_STREAM_TARGET = 816
+
+
+def preexpand_card_patch_stream(
+    data: bytearray,
+    *,
+    target_compressed: int = CARD_PATCH_STREAM_TARGET,
+) -> bool:
+    """
+    Расширяет zlib-поток полей карта→карта до фиксированного размера.
+
+    После добавления «8» в subset патч с длинными датами увеличивает поток
+  794→806 байт и ломает совпадение размера PDF с шаблоном. Предрасширение
+    до 816 байт стабилизирует размер чека для onlypdf_robot.
+    """
+    file_data = bytes(data)
+    for m in STREAM_RE.finditer(file_data):
+        raw = m.group(2)
+        try:
+            dec = zlib.decompress(raw)
+        except zlib.error:
+            continue
+        if len(raw) >= target_compressed:
+            continue
+        if len(raw) < 600 or len(raw) > 1200 or b"Tj" not in dec:
+            continue
+        new_raw = recompress_to_size(dec, target_compressed)
+        if new_raw is None:
+            padded = zlib.compress(dec, 9)
+            if len(padded) > target_compressed:
+                return False
+            for pad in range(4096):
+                new_raw = recompress_to_size(dec + b"\n%" + (b"%" * pad), target_compressed)
+                if new_raw is not None:
+                    break
+        if new_raw is None or len(new_raw) != target_compressed:
+            return False
+        span = _StreamSpan(m.start(), m.start(2), m.end(2), raw)
+        _patch_stream_span(data, span, new_raw)
+        return True
+    return False
 
 
 def repair_card_digits_in_pdf_bytes(
