@@ -177,6 +177,8 @@ COMPACT_TEXT_FIELDS = frozenset({
     "datetime_full",
     "datetime_header",
 })
+# Сумма с 5+ цифрами (30 000 и т.п.) — hex длиннее шаблона (СБП и карта).
+VARIABLE_LENGTH_AMOUNT_FIELDS = frozenset({"amount"})
 # Номера карт: длина hex должна совпадать с шаблоном (хвостовой NBSP).
 PADDED_CARD_FIELDS = frozenset({"sender_card", "recipient_card"})
 ANCHOR_TOLERANCE = 0.06
@@ -361,6 +363,45 @@ def format_amount_like(amount: int, template: str) -> str:
     return "".join(result)
 
 
+def format_amount_grouped(amount: int, template: str) -> str:
+    """
+    Сумма с разделителем тысяч и суффиксом RUR.
+
+    Используется, когда цифр больше, чем слотов в шаблоне (30 000 вместо 9 243).
+    Длина строки может отличаться — патч с variable-length.
+    """
+    if amount < 0:
+        raise AmountPatchError(f"Сумма не может быть отрицательной: {amount}")
+
+    digit_slots = [i for i, c in enumerate(template) if c.isdigit()]
+    if not digit_slots:
+        raise AmountPatchError(f"В шаблоне нет цифровых позиций: {template!r}")
+
+    last_digit = max(digit_slots)
+    suffix = template[last_digit + 1 :]
+    sep = "\xa0" if "\xa0" in template else " "
+    for idx in range(len(digit_slots) - 1):
+        gap = template[digit_slots[idx] + 1 : digit_slots[idx + 1]]
+        if gap and not gap[0].isdigit():
+            sep = gap[0]
+            break
+
+    digits = str(amount)
+    groups: list[str] = []
+    while digits:
+        groups.insert(0, digits[-3:])
+        digits = digits[:-3]
+    return sep.join(groups) + suffix
+
+
+def format_amount_for_field(amount: int, template: str) -> str:
+    """Сумма: in-place в слоты шаблона или grouped при 5+ цифрах."""
+    digit_slots = [i for i, c in enumerate(template) if c.isdigit()]
+    if len(str(amount)) <= len(digit_slots):
+        return format_amount_like(amount, template)
+    return format_amount_grouped(amount, template)
+
+
 def format_recipient_name(new_value: str, template: str) -> str:
     """
     ФИО получателя: «Фамилия Имя И» — только текст и один NBSP между словами.
@@ -451,7 +492,7 @@ def format_field_value(field_id: str, value: Any, template: str) -> str:
             if digits.isdigit():
                 value = int(digits)
         if isinstance(value, int):
-            return format_amount_like(value, template)
+            return format_amount_for_field(value, template)
     return format_text_like(str(value), template)
 
 
@@ -496,7 +537,7 @@ def encode_cid_text(text: str, unicode_to_cid: dict[str, str]) -> bytes:
 
 def build_replacement_bytes(match: AmountMatch, new_amount: int) -> bytes:
     """Строит байтовую замену той же длины, что и match.raw."""
-    new_text = format_amount_like(new_amount, match.text)
+    new_text = format_amount_for_field(new_amount, match.text)
 
     if match.encoding == "binary":
         new_raw = utf16be_encode(new_text)
@@ -1276,7 +1317,7 @@ def replace_fields_in_pdf(
     for field_id, fm, new_text in prepared:
         new_raw = encode_cid_text(new_text, cmap)
         if len(new_raw) != len(fm.raw):
-            if field_id not in COMPACT_TEXT_FIELDS:
+            if field_id not in COMPACT_TEXT_FIELDS and field_id not in VARIABLE_LENGTH_AMOUNT_FIELDS:
                 raise AmountPatchError(
                     f"Поле {field_id}: длина hex изменилась "
                     f"({len(fm.raw)} -> {len(new_raw)})"
@@ -1384,7 +1425,7 @@ def _replace_utf16be_amount(
     match = find_best_amount_match(bytes(original), None)
 
     replacement = build_replacement_bytes(match, new_amount)
-    new_text = format_amount_like(new_amount, match.text)
+    new_text = format_amount_for_field(new_amount, match.text)
     off = match.offset
     original[off : off + len(match.raw)] = replacement
 
@@ -1550,11 +1591,12 @@ CARD_BOT_SAFE_CMAP_MAX = 52
 CARD_BOT_SAFE_FONT_FILE2_MAX = 18_000
 CARD_BOT_SAFE_FONT_FILE2_EXACT = 17_584
 CARD_BOT_SAFE_GLYPH_COUNT = 56
-# PDF Document.pdf = 56086; шаблон с настоящей «8» (донор FontFile2) ≈ 56117, не 56139.
+# PDF Document.pdf = 56086; preexpand content stream 794→816 → 56139 (стабильный патч).
 CARD_ORIGINAL_FILE_SIZE = 56_086
-CARD_BOT_SAFE_FILE_SIZE = 56_117
-CARD_BOT_SAFE_CONTENT_STREAM = 794
-# Патч полей может увеличить PDF на несколько байт (56117→56120); бот принимает такой диапазон.
+CARD_LEGACY_FILE_SIZE = 56_117
+CARD_BOT_SAFE_FILE_SIZE = 56_139
+CARD_BOT_SAFE_CONTENT_STREAM = 816
+# Патч полей на preexpanded шаблоне обычно не меняет размер PDF.
 CARD_PATCH_MAX_SIZE_DELTA = 5
 # Перевод на счёт в другой банк: subset с полными цифрами 0–9 (в т.ч. «8»).
 ACCOUNT_BOT_SAFE_FONT_MARKER = "VQWVIK"
@@ -1631,6 +1673,61 @@ def has_all_receipt_digits(unicode_to_cid: dict[str, str]) -> bool:
     return not missing_receipt_digits(unicode_to_cid)
 
 
+def card_patch_stream_size(data: bytes) -> int | None:
+    """Размер zlib content stream с Tj (карта→карта)."""
+    for m in STREAM_RE.finditer(data):
+        raw = m.group(2)
+        try:
+            if b"Tj" in zlib.decompress(raw):
+                return len(raw)
+        except zlib.error:
+            continue
+    return None
+
+
+def ensure_card_template_preexpanded(
+    input_pdf: str | Path,
+    output_pdf: str | Path | None = None,
+) -> Path:
+    """
+    Расширяет zlib-поток полей до 816 байт → PDF 56139.
+
+    Стабилизирует размер при любых патчах (даты, сумма+комиссия, 5 цифр).
+    """
+    src = Path(input_pdf)
+    if not src.is_file():
+        raise AmountPatchError(f"Файл не найден: {src}")
+    from font_extend import fit_pdf_to_target, preexpand_card_patch_stream
+
+    dst = Path(output_pdf) if output_pdf else src
+    data = bytearray(src.read_bytes())
+    stream = card_patch_stream_size(bytes(data))
+    if (
+        stream == CARD_BOT_SAFE_CONTENT_STREAM
+        and len(data) == CARD_BOT_SAFE_FILE_SIZE
+    ):
+        if dst.resolve() != src.resolve():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(data)
+        return dst
+
+    if not preexpand_card_patch_stream(
+        data, target_compressed=CARD_BOT_SAFE_CONTENT_STREAM
+    ):
+        raise AmountPatchError(
+            f"Не удалось preexpand content stream {src.name} "
+            f"до {CARD_BOT_SAFE_CONTENT_STREAM} байт."
+        )
+    if not fit_pdf_to_target(data, CARD_BOT_SAFE_FILE_SIZE):
+        raise AmountPatchError(
+            f"Не удалось подогнать {src.name} к {CARD_BOT_SAFE_FILE_SIZE} байт "
+            "после preexpand."
+        )
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_bytes(data)
+    return dst
+
+
 def repair_card_template_digits(
     input_pdf: str | Path,
     output_pdf: str | Path | None = None,
@@ -1648,8 +1745,8 @@ def repair_card_template_digits(
         _extract_font_parts,
         digits_with_borrowed_c_glyph,
         fit_pdf_to_target,
+        preexpand_card_patch_stream,
         repair_card_digits_in_pdf_bytes,
-        stabilize_card_content_stream,
     )
 
     cmap = load_unicode_to_cid(src)
@@ -1657,14 +1754,14 @@ def repair_card_template_digits(
     missing = missing_receipt_digits(cmap)
     broken = digits_with_borrowed_c_glyph(parts)
     if not missing and not broken:
-        return src
+        return ensure_card_template_preexpanded(src, output_pdf)
 
     dst = Path(output_pdf) if output_pdf else src
     data = bytearray(src.read_bytes())
     original_ff2 = card_font_file2_size(src)
     fix_digits = set(missing) | set(broken)
     canonical_size = (
-        CARD_BOT_SAFE_FILE_SIZE
+        CARD_LEGACY_FILE_SIZE
         if src.resolve() == DEFAULT_CARD_INPUT.resolve()
         else len(data)
     )
@@ -1687,17 +1784,22 @@ def repair_card_template_digits(
         raise AmountPatchError(
             f"Не удалось добавить цифры in-place в шаблон {src.name}: {shown}"
         )
-    if not stabilize_card_content_stream(
-        data, target_compressed=CARD_BOT_SAFE_CONTENT_STREAM
-    ):
-        raise AmountPatchError(
-            f"Не удалось стабилизировать content stream ({src.name}) "
-            f"к {CARD_BOT_SAFE_CONTENT_STREAM} байт — бот может не распознать чек."
-        )
     if not fit_pdf_to_target(data, canonical_size):
         raise AmountPatchError(
             f"Не удалось подогнать размер {src.name} к {canonical_size} байт после "
-            "починки цифр — бот может не распознать чек."
+            "починки цифр."
+        )
+    if not preexpand_card_patch_stream(
+        data, target_compressed=CARD_BOT_SAFE_CONTENT_STREAM
+    ):
+        raise AmountPatchError(
+            f"Не удалось preexpand content stream ({src.name}) "
+            f"до {CARD_BOT_SAFE_CONTENT_STREAM} байт."
+        )
+    if not fit_pdf_to_target(data, CARD_BOT_SAFE_FILE_SIZE):
+        raise AmountPatchError(
+            f"Не удалось подогнать размер {src.name} к {CARD_BOT_SAFE_FILE_SIZE} байт "
+            "после preexpand."
         )
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_bytes(data)
@@ -2225,7 +2327,11 @@ def is_card_bot_safe_template(pdf_path: str | Path) -> bool:
         if CARD_BOT_SAFE_FONT_MARKER not in pdf_base_font_name(src):
             return False
         size = src.stat().st_size
-        if size not in (CARD_BOT_SAFE_FILE_SIZE, CARD_ORIGINAL_FILE_SIZE):
+        if size not in (
+            CARD_BOT_SAFE_FILE_SIZE,
+            CARD_LEGACY_FILE_SIZE,
+            CARD_ORIGINAL_FILE_SIZE,
+        ):
             return False
         if len(load_unicode_to_cid(src)) > CARD_BOT_SAFE_CMAP_MAX:
             return False
@@ -2257,6 +2363,8 @@ def resolve_card_bot_pass_template(explicit: Path) -> Path:
     отпечаток встроенного шрифта с проходящими чеками.
     """
     if is_card_bot_safe_template(explicit):
+        if explicit.stat().st_size == CARD_LEGACY_FILE_SIZE:
+            return ensure_card_template_preexpanded(explicit)
         return explicit
     desktop = DEFAULT_CARD_INPUT.parent
     for candidate in (
@@ -2306,6 +2414,8 @@ def validate_card_bot_safe_patch(
             continue
         new_raw = encode_cid_text(text, cmap)
         if len(new_raw) != len(discovered[field_id].raw):
+            if field_id in VARIABLE_LENGTH_AMOUNT_FIELDS:
+                continue
             label = FIELD_LABELS_CARD.get(field_id, field_id)
             length_problems.append(
                 f"  • {label} ({field_id}): hex {len(discovered[field_id].raw)} "
@@ -2832,7 +2942,7 @@ def main() -> int:
         if not discovered and "amount" in field_values and len(field_values) == 1:
             data = args.input.read_bytes()
             match = find_best_amount_match(data, args.input)
-            new_text = format_amount_like(field_values["amount"], match.text)
+            new_text = format_amount_for_field(field_values["amount"], match.text)
             replacement = build_replacement_bytes(match, field_values["amount"])
             print(f"Поле amount (UTF-16BE):")
             print(f"  было:  {_display_text(match.text)!r}")
