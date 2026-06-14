@@ -205,6 +205,7 @@ def build_patch_values(
     return base
 
 
+@lru_cache(maxsize=1)
 def find_alfa_template() -> Path:
     """Ищет bot-pass шаблон (по умолчанию templates/PROHOD_FIXED1.pdf в репозитории)."""
     env = os.getenv("ALFA_TEMPLATE_PDF", "").strip()
@@ -248,6 +249,7 @@ def find_alfa_template() -> Path:
     )
 
 
+@lru_cache(maxsize=1)
 def find_alfa_card_template() -> Path:
     """Ищет bot-pass шаблон чека карта→карта (оригинальный subset, не fullfont)."""
     env = os.getenv("ALFA_CARD_TEMPLATE_PDF", "").strip()
@@ -279,6 +281,7 @@ def find_alfa_card_template() -> Path:
     )
 
 
+@lru_cache(maxsize=1)
 def find_alfa_account_template() -> Path:
     """Ищет шаблон «перевод на счёт в другой банк» (PDF.pdf / PROHOD_ACCOUNT.pdf)."""
     env = os.getenv("ALFA_ACCOUNT_TEMPLATE_PDF", "").strip()

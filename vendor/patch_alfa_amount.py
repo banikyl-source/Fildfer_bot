@@ -871,13 +871,13 @@ def find_cid_amount_match(pdf_path: Path, data: bytes) -> AmountMatch:
     )
 
 
-def recompress_to_size(dec: bytes, target: int) -> bytes | None:
+def recompress_to_size(dec: bytes, target: int, *, max_pad: int = 4096) -> bytes | None:
     """Подбирает zlib-сжатие того же размера, что и оригинальный поток."""
     for level in range(10):
         c = zlib.compress(dec, level)
         if len(c) == target:
             return c
-    for pad in range(1, 4096):
+    for pad in range(1, max_pad + 1):
         suffix = b"\n%" + (b"%" * pad)
         for level in range(10):
             c = zlib.compress(dec + suffix, level)
@@ -977,6 +977,7 @@ def patch_cid_zlib_streams_multi(
     replacements: list[tuple[bytes, bytes]],
     *,
     allow_variable_length: bool = False,
+    preserve_stream_size: bool = False,
 ) -> str:
     """Заменяет несколько CID hex в zlib-потоке за один проход."""
     if not replacements:
@@ -1029,13 +1030,23 @@ def patch_cid_zlib_streams_multi(
         new_dec = body + padding
 
         hits += stream_hits
-        patched = recompress_patched_stream(new_dec, len(stream_raw))
-        if patched is None:
-            new_stream = zlib.compress(new_dec, 9)
-            mode = "length_xref"
+        if preserve_stream_size:
+            patched = recompress_patched_stream(new_dec, len(stream_raw))
+            if patched is None:
+                new_stream = zlib.compress(new_dec, 9)
+                mode = "length_xref"
+            else:
+                new_stream, new_len = patched
+                if new_len != len(stream_raw):
+                    mode = "length_xref"
+                elif mode != "length_xref":
+                    mode = "in_place"
         else:
-            new_stream, new_len = patched
-            if new_len != len(stream_raw):
+            new_stream = recompress_to_size(new_dec, len(stream_raw), max_pad=64)
+            if new_stream is None:
+                new_stream = zlib.compress(new_dec, 9)
+                mode = "length_xref"
+            elif len(new_stream) != len(stream_raw):
                 mode = "length_xref"
             elif mode != "length_xref":
                 mode = "in_place"
@@ -1385,7 +1396,12 @@ def replace_fields_in_pdf(
         }
 
     patch_mode = patch_cid_zlib_streams_multi(
-        original, replacements, allow_variable_length=allow_variable_length
+        original,
+        replacements,
+        allow_variable_length=allow_variable_length,
+        preserve_stream_size=(
+            receipt_template == "card" and is_card_bot_safe_template(src)
+        ),
     )
 
     font_swapped = False
@@ -1410,7 +1426,9 @@ def replace_fields_in_pdf(
             stabilize_card_content_stream(
                 original, target_compressed=CARD_BOT_SAFE_CONTENT_STREAM
             )
-        fit_pdf_to_target(original, original_size)
+            fit_pdf_to_target(original, original_size)
+        elif not allow_variable_length:
+            fit_pdf_to_target(original, original_size)
     dst.write_bytes(original)
 
     if src_ff2_md5 is not None:
