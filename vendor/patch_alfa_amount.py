@@ -177,6 +177,8 @@ COMPACT_TEXT_FIELDS = frozenset({
     "datetime_full",
     "datetime_header",
 })
+# СБП: ФИО получателя — variable-length, onlypdf_robot принимает до 21 символа.
+SBP_RECIPIENT_NAME_MAX_LEN = 21
 # Сумма с 5+ цифрами (30 000 и т.п.) — hex длиннее шаблона (СБП и карта).
 VARIABLE_LENGTH_AMOUNT_FIELDS = frozenset({"amount"})
 # Номера карт: длина hex должна совпадать с шаблоном (хвостовой NBSP).
@@ -402,12 +404,17 @@ def format_amount_for_field(amount: int, template: str) -> str:
     return format_amount_grouped(amount, template)
 
 
-def format_recipient_name(new_value: str, template: str) -> str:
+def format_recipient_name(
+    new_value: str,
+    template: str,
+    *,
+    max_len: int | None = None,
+) -> str:
     """
     ФИО получателя: «Фамилия Имя И» — только текст и один NBSP между словами.
 
     Без добивки до длины шаблона (короче hex в потоке, variable-length patch).
-  """
+    """
     pad = "\xa0" if "\xa0" in template else " "
     parts = new_value.strip().split()
     while len(parts) < 3:
@@ -427,10 +434,11 @@ def format_recipient_name(new_value: str, template: str) -> str:
         segments.extend([pad, initial])
     core = "".join(segments)
 
-    if len(core) > len(template):
+    limit = max_len if max_len is not None else len(template)
+    if len(core) > limit:
         raise AmountPatchError(
             f"ФИО {new_value!r} не помещается в поле "
-            f"({len(core)} > {len(template)} символов)"
+            f"({len(core)} > {limit} символов)"
         )
     return core
 
@@ -475,7 +483,11 @@ def format_text_like(new_value: str, template: str) -> str:
 
 def format_field_value(field_id: str, value: Any, template: str) -> str:
     """Форматирует значение поля под шаблон исходного текста."""
-    if field_id in ("recipient_name", "payer_name"):
+    if field_id == "recipient_name":
+        return format_recipient_name(
+            str(value), template, max_len=SBP_RECIPIENT_NAME_MAX_LEN
+        )
+    if field_id == "payer_name":
         return format_recipient_name(str(value), template)
     if field_id in PADDED_CARD_FIELDS:
         return format_text_like(str(value).strip(), template)
