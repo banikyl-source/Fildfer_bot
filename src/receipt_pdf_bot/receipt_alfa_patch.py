@@ -342,6 +342,7 @@ def _render_alfa_pdf(
         card_font_file2_md5,
         card_font_file2_size,
         card_font_glyph_count,
+        card_patch_stream_size,
         ensure_card_template_for_values,
         replace_fields_in_pdf,
         resolve_account_bot_pass_template,
@@ -387,7 +388,18 @@ def _render_alfa_pdf(
             from font_extend import fit_pdf_to_target, stabilize_card_content_stream
 
             out_data = bytearray(out_path.read_bytes())
+            template_data = template.read_bytes()
+            if card and out_data == template_data:
+                return out_path.read_bytes()
             if card:
+                template_stream = card_patch_stream_size(template_data)
+                out_stream = card_patch_stream_size(bytes(out_data))
+                if (
+                    len(out_data) == template_size
+                    and template_stream is not None
+                    and out_stream == template_stream
+                ):
+                    return out_path.read_bytes()
                 stabilize_card_content_stream(
                     out_data, target_compressed=CARD_BOT_SAFE_CONTENT_STREAM
                 )

@@ -705,67 +705,71 @@ async def handle_text(message: Message, state: FSMContext):
         await message.answer("⚙️ <b>Админ-панель</b>", reply_markup=get_admin_keyboard())
         return
 
-    # ---------- КНОПКИ МЕНЮ ----------
-    if text == BTN_CHECKS:
-        await state.clear()
-        await message.answer(TEXT_MENU_BANKS, reply_markup=get_banks_keyboard())
-        return
-
-    if text in (BTN_TBANK, "Т-банк"):
-        await state.clear()
-        await message.answer(TEXT_MENU_TBANK, reply_markup=get_tbank_variants_keyboard())
-        return
-
-    if text in (BTN_ALFA, "Альфа Банк"):
-        await state.clear()
-        await message.answer(TEXT_MENU_ALFA, reply_markup=get_alfa_variants_keyboard())
-        return
-
-    if text in (BTN_TBANK_PHONE, BTN_TBANK_CARD, "📞 По номеру телефона", "💳 По номеру карты"):
-        template_id = TEMPLATE_17_PHONE if "телефон" in text or text == BTN_TBANK_PHONE else TEMPLATE_17_CARD
-        await _start_receipt_flow(message, state, template_id)
-        return
-
-    if text == BTN_ALFA_SBP:
-        await _start_receipt_flow(message, state, TEMPLATE_ALFA)
-        return
-
-    if text == BTN_ALFA_CARD:
-        await _start_receipt_flow(message, state, TEMPLATE_ALFA_CARD)
-        return
-
-    if text == BTN_ALFA_OTHER:
-        await _start_receipt_flow(message, state, TEMPLATE_ALFA_OTHER)
-        return
-
-    if text == BTN_ADMIN and user_id == ADMIN_ID:
-        await state.clear()
-        await message.answer(
-            "⚙️ <b>Админ-панель</b>\n\nУправление ключами и пользователями.",
-            reply_markup=get_admin_keyboard(),
-        )
-        return
-
-    if text == BTN_BACK_MAIN:
-        await state.clear()
-        is_admin = (user_id == ADMIN_ID)
-        await message.answer(TEXT_WELCOME, reply_markup=get_main_keyboard(is_admin))
-        return
-
-    if text == BTN_BACK_BANKS:
-        await state.clear()
-        await message.answer(TEXT_MENU_BANKS, reply_markup=get_banks_keyboard())
-        return
-
-    if text in (BTN_SBER, "СберБанк"):
-        await _start_receipt_flow(message, state, TEMPLATE_CLASSIC)
-        return
+    fill_state = await state.get_state()
+    filling_receipt = fill_state and fill_state in _FIELD_BY_STATE
 
     if text == BTN_CANCEL or text == "❌ Отменить заполнение":
         await state.clear()
         is_admin = (user_id == ADMIN_ID)
         await message.answer("Заполнение отменено.", reply_markup=get_main_keyboard(is_admin))
         return
+
+    # ---------- КНОПКИ МЕНЮ (только вне заполнения чека) ----------
+    if not filling_receipt:
+        if text == BTN_CHECKS:
+            await state.clear()
+            await message.answer(TEXT_MENU_BANKS, reply_markup=get_banks_keyboard())
+            return
+
+        if text in (BTN_TBANK, "Т-банк"):
+            await state.clear()
+            await message.answer(TEXT_MENU_TBANK, reply_markup=get_tbank_variants_keyboard())
+            return
+
+        if text in (BTN_ALFA, "Альфа Банк"):
+            await state.clear()
+            await message.answer(TEXT_MENU_ALFA, reply_markup=get_alfa_variants_keyboard())
+            return
+
+        if text in (BTN_TBANK_PHONE, BTN_TBANK_CARD, "📞 По номеру телефона", "💳 По номеру карты"):
+            template_id = TEMPLATE_17_PHONE if "телефон" in text or text == BTN_TBANK_PHONE else TEMPLATE_17_CARD
+            await _start_receipt_flow(message, state, template_id)
+            return
+
+        if text == BTN_ALFA_SBP:
+            await _start_receipt_flow(message, state, TEMPLATE_ALFA)
+            return
+
+        if text == BTN_ALFA_CARD:
+            await _start_receipt_flow(message, state, TEMPLATE_ALFA_CARD)
+            return
+
+        if text == BTN_ALFA_OTHER:
+            await _start_receipt_flow(message, state, TEMPLATE_ALFA_OTHER)
+            return
+
+        if text == BTN_ADMIN and user_id == ADMIN_ID:
+            await state.clear()
+            await message.answer(
+                "⚙️ <b>Админ-панель</b>\n\nУправление ключами и пользователями.",
+                reply_markup=get_admin_keyboard(),
+            )
+            return
+
+        if text == BTN_BACK_MAIN:
+            await state.clear()
+            is_admin = (user_id == ADMIN_ID)
+            await message.answer(TEXT_WELCOME, reply_markup=get_main_keyboard(is_admin))
+            return
+
+        if text == BTN_BACK_BANKS:
+            await state.clear()
+            await message.answer(TEXT_MENU_BANKS, reply_markup=get_banks_keyboard())
+            return
+
+        if text in (BTN_SBER, "СберБанк"):
+            await _start_receipt_flow(message, state, TEMPLATE_CLASSIC)
+            return
 
     # ---------- АДМИН-КНОПКИ (без перехода в состояние) ----------
     if text == "➕ Добавить ключ" and user_id == ADMIN_ID:
@@ -802,15 +806,14 @@ async def handle_text(message: Message, state: FSMContext):
         return
 
     # ---------- FSM ДЛЯ ЗАПОЛНЕНИЯ ЧЕКА ----------
-    current_state = await state.get_state()
-    if current_state and current_state in _FIELD_BY_STATE:
+    if filling_receipt:
         data = await state.get_data()
-        field_name = _FIELD_BY_STATE[current_state]
+        field_name = _FIELD_BY_STATE[fill_state]
         values = data.get("values", {})
         values[field_name] = _normalize_value(text)
         await state.update_data(values=values)
         template_id = data.get("template_id", TEMPLATE_CLASSIC)
-        next_state = _next_state_for_template(current_state, template_id)
+        next_state = _next_state_for_template(fill_state, template_id)
         if next_state is None:
             try:
                 pdf_bytes, filename = await asyncio.to_thread(

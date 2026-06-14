@@ -950,6 +950,16 @@ def _fix_xref_offsets(data: bytearray, pivot: int, delta: int) -> None:
     data[abs_s:abs_e] = repl
 
 
+def _split_card_stream_padding(dec: bytes) -> tuple[bytes, bytes]:
+    """Отделяет PDF-операторы от %-паддинга (preexpand для onlypdf_robot)."""
+    for marker in (b"\nET\r\n", b"\nET\n", b"ET\r\n", b"ET\n"):
+        pos = dec.rfind(marker)
+        if pos >= 0:
+            end = pos + len(marker)
+            return dec[:end], dec[end:]
+    return dec, b""
+
+
 def patch_cid_zlib_streams_multi(
     data: bytearray,
     replacements: list[tuple[bytes, bytes]],
@@ -989,6 +999,8 @@ def patch_cid_zlib_streams_multi(
         new_dec = dec
         stream_hits = 0
         for old_hex, new_hex in replacements:
+            if old_hex == new_hex:
+                continue
             if old_hex in new_dec:
                 new_dec = new_dec.replace(old_hex, new_hex, 1)
                 stream_hits += 1
@@ -997,6 +1009,12 @@ def patch_cid_zlib_streams_multi(
             out.extend(m.group(0))
             pos = m.end()
             continue
+
+        body, padding = _split_card_stream_padding(new_dec)
+        orig_body, orig_padding = _split_card_stream_padding(dec)
+        if not padding and orig_padding:
+            padding = orig_padding
+        new_dec = body + padding
 
         hits += stream_hits
         patched = recompress_patched_stream(new_dec, len(stream_raw))
@@ -1316,6 +1334,14 @@ def replace_fields_in_pdf(
     allow_variable_length = False
     for field_id, fm, new_text in prepared:
         new_raw = encode_cid_text(new_text, cmap)
+        if new_raw == fm.raw:
+            changes[field_id] = {
+                "old": fm.text,
+                "new": new_text,
+                "hex_old": fm.raw.decode("ascii"),
+                "hex_new": new_raw.decode("ascii"),
+            }
+            continue
         if len(new_raw) != len(fm.raw):
             if field_id not in COMPACT_TEXT_FIELDS and field_id not in VARIABLE_LENGTH_AMOUNT_FIELDS:
                 raise AmountPatchError(
@@ -1329,6 +1355,21 @@ def replace_fields_in_pdf(
             "new": new_text,
             "hex_old": fm.raw.decode("ascii"),
             "hex_new": new_raw.decode("ascii"),
+        }
+
+    if not replacements:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(original)
+        return {
+            "input": str(src),
+            "output": str(dst),
+            "fields": changes,
+            "patch_mode": "noop",
+            "font_extended": font_extended,
+            "font_chars_added": list(added_chars),
+            "font_swapped": False,
+            "size_unchanged": True,
+            "qpdf_ok": None,
         }
 
     patch_mode = patch_cid_zlib_streams_multi(
@@ -2363,7 +2404,10 @@ def resolve_card_bot_pass_template(explicit: Path) -> Path:
     отпечаток встроенного шрифта с проходящими чеками.
     """
     if is_card_bot_safe_template(explicit):
-        if explicit.stat().st_size == CARD_LEGACY_FILE_SIZE:
+        if (
+            explicit.stat().st_size == CARD_LEGACY_FILE_SIZE
+            and card_patch_stream_size(explicit.read_bytes()) != CARD_BOT_SAFE_CONTENT_STREAM
+        ):
             return ensure_card_template_preexpanded(explicit)
         return explicit
     desktop = DEFAULT_CARD_INPUT.parent
