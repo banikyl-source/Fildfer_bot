@@ -1160,34 +1160,25 @@ def _ensure_needed_chars(
     card_template = receipt_template == "card" or is_card_bot_safe_template(pdf_path)
     digit_missing = {ch for ch in missing if ch in RECEIPT_DIGITS}
     if card_template and missing <= set(RECEIPT_DIGITS):
-        from font_extend import repair_card_digits_in_pdf_bytes
+        from font_extend import map_card_digits_cmap_only_in_pdf_bytes
 
-        font_donor: Path | None = None
-        try:
-            font_donor = resolve_canonical_card_font_donor()
-        except AmountPatchError:
-            font_donor = None
-
-        result = repair_card_digits_in_pdf_bytes(
+        result = map_card_digits_cmap_only_in_pdf_bytes(
             data,
             pdf_path,
             digits=digit_missing,
-            font_donor=font_donor,
-            target_size=len(data),
+            target_size=CARD_BOT_SAFE_FILE_SIZE,
         )
         if not result.extended:
             shown = ", ".join(repr(ch) for ch in sorted(digit_missing, key=ord))
             raise AmountPatchError(
-                f"Карта→карта: не удалось добавить цифры in-place: {shown}.\n"
-                "Соберите шаблон:\n"
-                "  python patch_alfa_amount.py PDF Document.pdf --fix-card-template "
-                "-o PROHOD_CARD_FIXED1.pdf"
+                f"Карта→карта: не удалось добавить цифры CMap-only: {shown}.\n"
+                "Используйте шаблон PDF Document.pdf (56086 байт)."
             )
         still = chars_needing_font_extension(needed, result.cmap)
         if still:
             shown = ", ".join(repr(ch) for ch in sorted(still, key=ord))
             raise AmountPatchError(
-                f"Карта→карта: после in-place починки всё ещё нет символов: {shown}"
+                f"Карта→карта: после CMap-only всё ещё нет символов: {shown}"
             )
         return result.cmap, True, result.added_chars
     if card_template and digit_missing:
@@ -1421,12 +1412,9 @@ def replace_fields_in_pdf(
             fit_pdf_to_target(original, MAX_PDF_BYTES)
     else:
         if receipt_template == "card" and is_card_bot_safe_template(src):
-            from font_extend import stabilize_card_content_stream
+            from font_extend import fit_card_bot_pass_pdf
 
-            stabilize_card_content_stream(
-                original, target_compressed=CARD_BOT_SAFE_CONTENT_STREAM
-            )
-            fit_pdf_to_target(original, original_size)
+            fit_card_bot_pass_pdf(original, target_size=original_size)
         elif not allow_variable_length:
             fit_pdf_to_target(original, original_size)
     dst.write_bytes(original)
@@ -1649,25 +1637,34 @@ DEFAULT_BOT_SAFE_FULLFONT = Path(r"C:\Users\Жопсик\Desktop\pdf58_fullfont.
 DEFAULT_BOT_SQUASH = Path(r"C:\Users\Жопсик\Desktop\pdf58_squash.pdf")
 # Шаблон, который проходит onlypdf_robot: ~73 КБ, hinting сохранён, У→CID 008A (как lauchj.pdf).
 DEFAULT_BOT_PASS_TEMPLATE = Path(r"C:\Users\Жопсик\Desktop\test_patch.pdf")
-DEFAULT_CARD_INPUT = Path(r"C:\Users\Жопсик\Desktop\PDF Document.pdf")
+DEFAULT_CARD_INPUT = Path(r"C:\Users\Жопсик\Desktop\pdf 999.pdf")
+DEFAULT_CARD_LEGACY_INPUT = Path(r"C:\Users\Жопсик\Desktop\PDF Document.pdf")
 DEFAULT_CARD_FULLFONT = Path(r"C:\Users\Жопсик\Desktop\alfa_card_fullfont.pdf")
 DEFAULT_ACCOUNT_INPUT = Path(r"d:\Загрузки\PDF.pdf")
-# Оригинал карта→карта: subset 48 символов, FontFile2 ≈ 17584 байт.
-# MD5 FontFile2 шаблона с in-place цифрой «8» (PROHOD_CARD_FIXED1 после --fix-card-template).
+# Оригинал карта→карта (pdf 999.pdf): subset 46 символов, FontFile2 16944 байт.
+# onlypdf_robot: 55919 байт, stream 811, MD5 FontFile2 ниже.
+CARD_ORIGINAL_FONT_FILE2_MD5 = "cf1ae026652e386a3607095f46469c77"
+# Устаревшие эталоны (PDF Document.pdf / in-place «8») — бот их не принимает.
+CARD_LEGACY_FONT_FILE2_MD5 = "8a195e510542600023beb25b994cfa4d"
 CARD_BOT_PASS_FONT_FILE2_MD5 = "068671420ef3923487d79b316587724a"
-# MD5 оригинала PDF Document.pdf (без «8» в subset).
-CARD_ORIGINAL_FONT_FILE2_MD5 = "8a195e510542600023beb25b994cfa4d"
-CARD_BOT_SAFE_FONT_MARKER = "MIYPCA"
-CARD_BOT_SAFE_CMAP_MAX = 52
+CARD_BOT_SAFE_FONT_MARKER = "OETISU"
+CARD_BOT_SAFE_CMAP_MAX = 48
 CARD_BOT_SAFE_FONT_FILE2_MAX = 18_000
-CARD_BOT_SAFE_FONT_FILE2_EXACT = 17_584
-CARD_BOT_SAFE_GLYPH_COUNT = 56
-# PDF Document.pdf = 56086; preexpand content stream 794→816 → 56139 (стабильный патч).
-CARD_ORIGINAL_FILE_SIZE = 56_086
-CARD_LEGACY_FILE_SIZE = 56_117
-CARD_BOT_SAFE_FILE_SIZE = 56_139
-CARD_BOT_SAFE_CONTENT_STREAM = 816
-# Патч полей на preexpanded шаблоне обычно не меняет размер PDF.
+CARD_BOT_SAFE_FONT_FILE2_EXACT = 16_944
+CARD_BOT_SAFE_GLYPH_COUNT = 54
+CARD_ORIGINAL_FILE_SIZE = 55_919
+CARD_ORIGINAL_CONTENT_STREAM = 811
+CARD_BOT_SAFE_FILE_SIZE = CARD_ORIGINAL_FILE_SIZE
+CARD_BOT_SAFE_CONTENT_STREAM = CARD_ORIGINAL_CONTENT_STREAM
+# Старый PDF Document.pdf (не проходит бота как эталон).
+CARD_LEGACY_FONT_MARKER = "MIYPCA"
+CARD_LEGACY_FILE_SIZE = 56_086
+CARD_LEGACY_CONTENT_STREAM = 794
+CARD_LEGACY_FONT_FILE2_EXACT = 17_584
+CARD_LEGACY_GLYPH_COUNT = 56
+CARD_PREEXPAND_FILE_SIZE = 56_139
+CARD_PREEXPAND_CONTENT_STREAM = 816
+# Патч полей: ±5 байт от 55919.
 CARD_PATCH_MAX_SIZE_DELTA = 5
 # Перевод на счёт в другой банк: subset с полными цифрами 0–9 (в т.ч. «8»).
 ACCOUNT_BOT_SAFE_FONT_MARKER = "VQWVIK"
@@ -2333,6 +2330,76 @@ def _card_template_repair_dest(template: Path) -> Path:
     return template.with_name(f"{template.stem}_digits_fixed{template.suffix}")
 
 
+def build_card_cmap_template(
+    input_pdf: str | Path,
+    output_pdf: str | Path | None = None,
+) -> Path:
+    """
+    Собирает bot-pass шаблон карта→карта.
+
+    pdf 999.pdf уже содержит цифры 0–9 — копируется как есть.
+    Для старых PDF (PDF Document.pdf) добавляет цифры через CMap-only.
+    """
+    src = Path(input_pdf)
+    if not src.is_file():
+        raise AmountPatchError(f"Файл не найден: {src}")
+
+    dst = Path(output_pdf) if output_pdf else src
+    cmap = load_unicode_to_cid(src)
+    if is_card_bot_safe_template(src) and not missing_receipt_digits(cmap):
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if dst.resolve() != src.resolve():
+            dst.write_bytes(src.read_bytes())
+        return dst
+
+    from font_extend import map_card_digits_cmap_only_in_pdf_bytes
+
+    data = bytearray(src.read_bytes())
+    result = map_card_digits_cmap_only_in_pdf_bytes(
+        data,
+        src,
+        digits=set(RECEIPT_DIGITS),
+        target_size=CARD_BOT_SAFE_FILE_SIZE,
+    )
+    if not result.extended and missing_receipt_digits(result.cmap):
+        missing = missing_receipt_digits(result.cmap)
+        shown = ", ".join(repr(ch) for ch in missing)
+        raise AmountPatchError(
+            f"Не удалось добавить цифры CMap-only в {src.name}: {shown}"
+        )
+    if card_font_file2_md5_from_data(bytes(data)) != CARD_ORIGINAL_FONT_FILE2_MD5:
+        raise AmountPatchError(
+            f"FontFile2 MD5 изменился после CMap-only. "
+            f"Нужен {CARD_ORIGINAL_FONT_FILE2_MD5}."
+        )
+    if len(data) != CARD_BOT_SAFE_FILE_SIZE:
+        raise AmountPatchError(
+            f"Размер {dst.name} после CMap-only: {len(data)} байт, "
+            f"нужно {CARD_BOT_SAFE_FILE_SIZE}."
+        )
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_bytes(data)
+    if not is_card_bot_safe_template(dst):
+        raise AmountPatchError(
+            f"Шаблон {dst.name} не проходит bot-safe проверку после CMap-only."
+        )
+    return dst
+
+
+def card_font_file2_md5_from_data(data: bytes) -> str:
+    import hashlib
+    import pypdf
+    from io import BytesIO
+
+    ff = (
+        pypdf.PdfReader(BytesIO(data))
+        .pages[0]["/Resources"]["/Font"]["/F1"]["/DescendantFonts"][0]
+        ["/FontDescriptor"]["/FontFile2"]
+        .get_data()
+    )
+    return hashlib.md5(ff).hexdigest()
+
+
 def ensure_card_template_for_values(
     template: Path,
     field_values: dict[str, Any],
@@ -2340,19 +2407,10 @@ def ensure_card_template_for_values(
     output: Path | None = None,
 ) -> Path:
     """
-    Возвращает шаблон карта→карта с цифрами 0–9 для указанных полей.
-
-    Оригинал PDF Document.pdf не содержит «8» — без in-place починки бот
-    не распознаёт чеки с этой цифрой в сумме.
+    Возвращает шаблон карта→карта с цифрами 0–9 (CMap-only, FontFile2 оригинала).
     """
     template = resolve_card_bot_pass_template(template)
     cmap = load_unicode_to_cid(template)
-    from font_extend import _extract_font_parts, digits_with_borrowed_c_glyph
-
-    parts = _extract_font_parts(template)
-    broken = digits_with_borrowed_c_glyph(parts)
-    if not missing_receipt_digits(cmap) and not broken:
-        return template
 
     discovered = discover_fields(template, template="card")
     needed: set[str] = set()
@@ -2362,8 +2420,7 @@ def ensure_card_template_for_values(
         needed.update(format_field_value(field_id, value, discovered[field_id].text))
     still_needed = chars_needing_font_extension(needed, cmap)
     digit_missing = {ch for ch in still_needed if ch in RECEIPT_DIGITS}
-    digit_broken = {ch for ch in broken if ch in needed}
-    if not digit_missing and not digit_broken:
+    if not digit_missing and not missing_receipt_digits(cmap):
         return template
 
     non_digit = still_needed - digit_missing
@@ -2377,32 +2434,26 @@ def ensure_card_template_for_values(
     dst = output or _card_template_repair_dest(template)
     if dst.is_file() and dst.resolve() != template.resolve():
         dst_cmap = load_unicode_to_cid(dst)
-        dst_parts = _extract_font_parts(dst)
-        if (
-            is_card_bot_safe_template(dst)
-            and not missing_receipt_digits(dst_cmap)
-            and not digits_with_borrowed_c_glyph(dst_parts)
-            and all(ch in dst_cmap for ch in digit_missing | digit_broken)
+        if is_card_bot_safe_template(dst) and all(
+            ch in dst_cmap for ch in digit_missing
         ):
             return dst
 
-    return repair_card_template_digits(template, dst)
+    base = DEFAULT_CARD_INPUT if DEFAULT_CARD_INPUT.is_file() else template
+    return build_card_cmap_template(base, dst)
 
 
 def is_card_bot_safe_template(pdf_path: str | Path) -> bool:
-    """Шаблон карта→карта без расширенного subset (как PDF Document.pdf)."""
+    """Шаблон карта→карта как pdf 999.pdf (55919 байт, оригинальный FontFile2)."""
     src = Path(pdf_path)
     if not src.is_file():
         return False
     try:
         if CARD_BOT_SAFE_FONT_MARKER not in pdf_base_font_name(src):
             return False
-        size = src.stat().st_size
-        if size not in (
-            CARD_BOT_SAFE_FILE_SIZE,
-            CARD_LEGACY_FILE_SIZE,
-            CARD_ORIGINAL_FILE_SIZE,
-        ):
+        if src.stat().st_size != CARD_BOT_SAFE_FILE_SIZE:
+            return False
+        if card_patch_stream_size(src.read_bytes()) != CARD_BOT_SAFE_CONTENT_STREAM:
             return False
         if len(load_unicode_to_cid(src)) > CARD_BOT_SAFE_CMAP_MAX:
             return False
@@ -2413,14 +2464,8 @@ def is_card_bot_safe_template(pdf_path: str | Path) -> bool:
             return False
         if card_font_glyph_count(src) != CARD_BOT_SAFE_GLYPH_COUNT:
             return False
-        from font_extend import _extract_font_parts, digits_with_borrowed_c_glyph
-
-        cmap = load_unicode_to_cid(src)
-        if digits_with_borrowed_c_glyph(_extract_font_parts(src)):
+        if card_font_file2_md5(src) != CARD_ORIGINAL_FONT_FILE2_MD5:
             return False
-        if has_all_receipt_digits(cmap):
-            if card_font_file2_md5(src) != CARD_BOT_PASS_FONT_FILE2_MD5:
-                return False
     except Exception:
         return False
     return True
@@ -2428,31 +2473,30 @@ def is_card_bot_safe_template(pdf_path: str | Path) -> bool:
 
 def resolve_card_bot_pass_template(explicit: Path) -> Path:
     """
-    Шаблон карта→карта для onlypdf_robot: оригинальный subset (~56 КБ).
-
-    fullfont (alfa_card_fullfont.pdf) даёт «чек не распознан» — бот сверяет
-    отпечаток встроенного шрифта с проходящими чеками.
+    Шаблон карта→карта для onlypdf_robot: pdf 999.pdf (55919 байт).
     """
     if is_card_bot_safe_template(explicit):
-        if (
-            explicit.stat().st_size == CARD_LEGACY_FILE_SIZE
-            and card_patch_stream_size(explicit.read_bytes()) != CARD_BOT_SAFE_CONTENT_STREAM
-        ):
-            return ensure_card_template_preexpanded(explicit)
         return explicit
     desktop = DEFAULT_CARD_INPUT.parent
     for candidate in (
         DEFAULT_CARD_INPUT,
+        desktop / "pdf 999.pdf",
         desktop / "PROHOD_CARD_FIXED1.pdf",
         explicit,
     ):
         if is_card_bot_safe_template(candidate):
             return candidate
+    if DEFAULT_CARD_INPUT.is_file():
+        return build_card_cmap_template(
+            DEFAULT_CARD_INPUT,
+            explicit.parent / "PROHOD_CARD_FIXED1.pdf"
+            if explicit.parent.name == "templates"
+            else explicit,
+        )
     raise AmountPatchError(
-        f"Шаблон {explicit.name} не подходит для бота (расширенный subset шрифта).\n"
-        f"Используйте оригинал {DEFAULT_CARD_INPUT.name} (~56 КБ, 48 символов в CMap),\n"
-        "не alfa_card_fullfont.pdf.\n"
-        "Скопируйте PDF Document.pdf → PROHOD_CARD_FIXED1.pdf в templates/."
+        f"Шаблон {explicit.name} не подходит для бота.\n"
+        f"Положите оригинал {DEFAULT_CARD_INPUT.name} ({CARD_BOT_SAFE_FILE_SIZE} байт) "
+        "в templates/ как PROHOD_CARD_FIXED1.pdf."
     )
 
 
@@ -2465,7 +2509,6 @@ def validate_card_bot_safe_patch(
     src = resolve_card_bot_pass_template(Path(pdf_path))
     discovered = discover_fields(src, template="card")
     cmap = load_unicode_to_cid(src)
-    from font_extend import _extract_font_parts, digits_with_borrowed_c_glyph
 
     needed: set[str] = set()
     field_problems: list[str] = []
@@ -2497,30 +2540,14 @@ def validate_card_bot_safe_patch(
             )
 
     missing = chars_needing_font_extension(needed, cmap)
-    broken = digits_with_borrowed_c_glyph(_extract_font_parts(src))
-    broken_needed = sorted(
-        {ch for ch in broken if ch in needed and ch in RECEIPT_DIGITS},
-        key=ord,
-    )
-    if broken_needed:
-        shown = ", ".join(repr(ch) for ch in broken_needed)
-        raise AmountPatchError(
-            f"Карта→карта: цифры с контуром «C» вместо глифа: {shown}.\n"
-            "CMap-only даёт «8» при копировании, но на экране «C».\n"
-            "Пересоберите шаблон:\n"
-            "  python patch_alfa_amount.py PDF\\ Document.pdf --fix-card-template "
-            "-o Fildfer_bot3-main/templates/PROHOD_CARD_FIXED1.pdf"
-        )
     if missing:
         shown = ", ".join(repr(ch) for ch in sorted(missing, key=ord))
         details = "\n".join(field_problems) if field_problems else ""
         digit_hint = ""
         if "8" in missing:
             digit_hint = (
-                "\nВ шаблоне PDF Document.pdf нет цифры «8» (в оригинале сумма 1 466 ₽). "
-                "Пересоберите шаблон:\n"
-                "  python patch_alfa_amount.py PDF Document.pdf --fix-card-template "
-                "-o templates/PROHOD_CARD_FIXED1.pdf\n"
+                "\nВ шаблоне нет цифры «8». "
+                "Пересоберите: python update_card_template.py\n"
             )
         raise AmountPatchError(
             f"Карта→карта: в subset нет символов: {shown}.\n"

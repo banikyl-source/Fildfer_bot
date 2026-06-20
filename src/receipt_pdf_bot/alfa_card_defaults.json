@@ -1,11 +1,11 @@
 {
-  "amount": 8888,
-  "commission": "47,12",
-  "datetime_header": "06.06.2026 12:00 мск",
-  "datetime_full": "06.06.2026 12:00:00 мск",
-  "sender_card": "220015******7714",
-  "recipient_card": "220070******0777",
-  "auth_code": "7KW6CM",
+  "amount": 10,
+  "commission": "49,20",
+  "datetime_header": "17.06.2026 15:24 мск",
+  "datetime_full": "16.06.2026 23:34:29 мск",
+  "sender_card": "220015******8056",
+  "recipient_card": "220220******7575",
+  "auth_code": "8UY407",
   "terminal_code": "193571",
-  "operation_ref": "Z091405260059714"
+  "operation_ref": "Z091606260114245"
 }

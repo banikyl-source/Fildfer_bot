@@ -21,10 +21,13 @@ from patch_alfa_amount import (
     _classify_field,
     _fix_xref_offsets,
     _parse_cmap_bfchar,
+    _update_stream_length,
     chars_needing_font_extension,
     decode_cid_hex,
     recompress_to_size,
     AmountPatchError,
+    CARD_BOT_SAFE_CONTENT_STREAM,
+    CARD_BOT_SAFE_FILE_SIZE,
 )
 
 _MODULE_DIR = Path(__file__).resolve().parent
@@ -888,10 +891,12 @@ def _patch_font_streams_in_bytes(
 
 
 CARD_PATCH_STREAM_TARGET = 816
-# Оригинальный zlib-поток полей PDF Document.pdf (preexpand до 816 ломает бота).
-CARD_CONTENT_STREAM_ORIGINAL = 794
-# После патча полей поток может вырасти на несколько байт (794→797); бот принимает ~56117–56122.
-CARD_PATCH_MAX_STREAM_GROWTH = 8
+# Эталонный zlib-поток полей (pdf 999.pdf).
+CARD_CONTENT_STREAM_ORIGINAL = CARD_BOT_SAFE_CONTENT_STREAM
+CARD_PATCH_STREAM_ALTERNATES = tuple(
+    CARD_BOT_SAFE_CONTENT_STREAM + d
+    for d in (0, -1, 1, 5, -2, 2, -3, 3, 4, -4, -5, 5, 6, -6)
+)
 
 
 def _recompress_padded(dec: bytes, target: int) -> bytes | None:
@@ -907,6 +912,54 @@ def _recompress_padded(dec: bytes, target: int) -> bytes | None:
             if len(c) == target:
                 return c
     return None
+
+
+def fit_card_bot_pass_pdf(
+    data: bytearray,
+    *,
+    target_size: int = CARD_BOT_SAFE_FILE_SIZE,
+    preferred_stream: int | None = CARD_CONTENT_STREAM_ORIGINAL,
+) -> bool:
+    """
+    Подгоняет карта→карта PDF к размеру оригинала (pdf 999.pdf).
+    """
+    file_data = bytes(data)
+    for m in STREAM_RE.finditer(file_data):
+        raw = m.group(2)
+        try:
+            dec = zlib.decompress(raw)
+        except zlib.error:
+            continue
+        if b"Tj" not in dec:
+            continue
+
+        cur = len(raw)
+        targets: list[int] = []
+        seen: set[int] = set()
+        for t in (preferred_stream, *CARD_PATCH_STREAM_ALTERNATES, cur):
+            if t is None or t in seen:
+                continue
+            seen.add(t)
+            targets.append(t)
+
+        for stream_target in targets:
+            new_raw = _recompress_padded(dec, stream_target)
+            if new_raw is None:
+                new_raw = recompress_to_size(dec, stream_target, max_pad=8192)
+            if new_raw is None:
+                continue
+            trial = bytearray(data)
+            span = _StreamSpan(m.start(), m.start(2), m.end(2), raw)
+            _patch_stream_span(trial, span, new_raw)
+            delta = len(trial) - len(data)
+            if delta:
+                _update_stream_length(trial, m.start(2), len(new_raw))
+                _fix_xref_offsets(trial, m.start(2), delta)
+            if fit_pdf_to_target(trial, target_size):
+                data[:] = trial
+                return True
+        return False
+    return False
 
 
 def stabilize_card_content_stream(

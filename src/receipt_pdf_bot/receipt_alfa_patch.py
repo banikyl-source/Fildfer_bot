@@ -263,8 +263,8 @@ def find_alfa_card_template() -> Path:
 
     preferred = (
         DEFAULT_ALFA_CARD_TEMPLATE,
+        DESKTOP / "pdf 999.pdf",
         DESKTOP / "PROHOD_CARD_FIXED1.pdf",
-        DESKTOP / "PDF Document.pdf",
     )
     for candidate in preferred:
         if candidate.is_file():
@@ -274,8 +274,8 @@ def find_alfa_card_template() -> Path:
                 continue
 
     raise FileNotFoundError(
-        f"Не найден bot-pass шаблон карта→карта (PDF Document.pdf / PROHOD_CARD_FIXED1.pdf).\n"
-        f"Положите копию {DESKTOP / 'PDF Document.pdf'} в {BOT_TEMPLATES} "
+        f"Не найден bot-pass шаблон карта→карта (pdf 999.pdf / PROHOD_CARD_FIXED1.pdf).\n"
+        f"Положите копию {DESKTOP / 'pdf 999.pdf'} в {BOT_TEMPLATES} "
         "как PROHOD_CARD_FIXED1.pdf.\n"
         "Не используйте alfa_card_fullfont.pdf — бот не распознаёт расширенный шрифт."
     )
@@ -337,7 +337,6 @@ def _render_alfa_pdf(
         ACCOUNT_BOT_SAFE_FONT_FILE2_EXACT,
         ACCOUNT_BOT_SAFE_GLYPH_COUNT,
         AmountPatchError,
-        CARD_BOT_SAFE_CONTENT_STREAM,
         CARD_BOT_SAFE_FILE_SIZE,
         CARD_BOT_SAFE_FONT_FILE2_EXACT,
         CARD_BOT_SAFE_GLYPH_COUNT,
@@ -345,7 +344,6 @@ def _render_alfa_pdf(
         card_font_file2_md5,
         card_font_file2_size,
         card_font_glyph_count,
-        card_patch_stream_size,
         ensure_card_template_for_values,
         replace_fields_in_pdf,
         resolve_account_bot_pass_template,
@@ -388,25 +386,18 @@ def _render_alfa_pdf(
             template=receipt_template,
         )
         if card or account:
-            from font_extend import fit_pdf_to_target, stabilize_card_content_stream
+            from font_extend import fit_card_bot_pass_pdf, fit_pdf_to_target
 
             out_data = bytearray(out_path.read_bytes())
             template_data = template.read_bytes()
             if card and out_data == template_data:
                 return out_path.read_bytes()
             if card:
-                template_stream = card_patch_stream_size(template_data)
-                out_stream = card_patch_stream_size(bytes(out_data))
-                if (
-                    len(out_data) == template_size
-                    and template_stream is not None
-                    and out_stream == template_stream
-                ):
+                if len(out_data) == template_size:
                     return out_path.read_bytes()
-                stabilize_card_content_stream(
-                    out_data, target_compressed=CARD_BOT_SAFE_CONTENT_STREAM
-                )
-            fit_pdf_to_target(out_data, template_size)
+                fit_card_bot_pass_pdf(out_data, target_size=template_size)
+            else:
+                fit_pdf_to_target(out_data, template_size)
             out_path.write_bytes(out_data)
             out_size = out_path.stat().st_size
             expected_size = (
@@ -416,7 +407,7 @@ def _render_alfa_pdf(
                 raise AmountPatchError(
                     f"Размер PDF изменился ({expected_size} → {out_size} байт). "
                     "Бот не распознает чек — пересоберите PROHOD_CARD_FIXED1 "
-                    "(--fix-card-template из PDF Document.pdf)."
+                    "из pdf 999.pdf."
                 )
             if account and out_size != template_size and abs(out_size - template_size) > 2:
                 raise AmountPatchError(
