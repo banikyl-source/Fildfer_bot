@@ -1094,7 +1094,7 @@ def recompress_card_preserving_dec(
     """
     Сжимает content stream карта→карта, сохраняя len(dec).
 
-    Как у СБП: перебор level + padding в slack + близкие размеры zlib (811±5).
+    Как у СБП: перебор level + padding в slack + близкие размеры zlib (811±8).
     """
     target_len = len(template_dec)
     slack_start = _card_stream_slack_start(template_dec)
@@ -1128,14 +1128,27 @@ def recompress_card_preserving_dec(
         if hit is not None:
             return hit
 
-    # Полный перебор 0–255 по последним байтам slack (быстро, без 256²)
-    for pos in range(max(slack_start, slack_end - 6), slack_end):
+    # Полный перебор 0–255 по всему slack-хвосту (~40 байт)
+    for pos in range(slack_start, slack_end):
         for val in range(256):
             trial = bytearray(base)
             trial[pos] = val
             hit = _card_try_zlib_targets(bytes(trial), targets)
             if hit is not None:
                 return hit
+
+    # 2-байтовый перебор по последним 4 позициям slack (редкие случаи)
+    tail_start = max(slack_start, slack_end - 4)
+    for p1 in range(tail_start, slack_end):
+        for p2 in range(p1 + 1, slack_end):
+            for v1 in range(256):
+                for v2 in range(256):
+                    trial = bytearray(base)
+                    trial[p1] = v1
+                    trial[p2] = v2
+                    hit = _card_try_zlib_targets(bytes(trial), targets)
+                    if hit is not None:
+                        return hit
 
     return None
 
@@ -1997,8 +2010,8 @@ CARD_PREEXPAND_FILE_SIZE = 56_139
 CARD_PREEXPAND_CONTENT_STREAM = 816
 # Патч полей: ±5 байт от 55919.
 CARD_PATCH_MAX_SIZE_DELTA = 5
-# Допустимые размеры zlib-потока (как recompress_patched_stream у СБП).
-CARD_ZLIB_SIZE_ALTERNATES = (0, -1, 1, -2, 2, -3, 3)
+# Допустимые размеры zlib-потока: 811±8 (worst-case патчи дают min ~815).
+CARD_ZLIB_SIZE_ALTERNATES = (0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5, -6, 6, -7, 7, 8, -8)
 # Перевод на счёт в другой банк: subset с полными цифрами 0–9 (в т.ч. «8»).
 ACCOUNT_BOT_SAFE_FONT_MARKER = "VQWVIK"
 ACCOUNT_BOT_SAFE_CMAP_MAX = 72
