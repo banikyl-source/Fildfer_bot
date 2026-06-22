@@ -925,42 +925,46 @@ def fit_card_bot_pass_pdf(
     """
     Подгоняет карта→карта PDF к размеру оригинала (pdf 999.pdf).
     """
+    from patch_alfa_amount import (
+        CARD_ORIGINAL_CONTENT_STREAM,
+        recompress_card_preserving_dec,
+    )
+
     file_data = bytes(data)
+    template_dec: bytes | None = None
+    main_span: _StreamSpan | None = None
     for m in STREAM_RE.finditer(file_data):
         raw = m.group(2)
         try:
             dec = zlib.decompress(raw)
         except zlib.error:
             continue
-        if b"Tj" not in dec:
+        if b"Tj" not in dec or len(dec) >= 20_000:
             continue
+        if len(raw) == CARD_ORIGINAL_CONTENT_STREAM:
+            template_dec = dec
+            main_span = _StreamSpan(m.start(), m.start(2), m.end(2), raw)
+            break
+    if template_dec is None or main_span is None:
+        return fit_pdf_to_target(data, target_size)
 
-        cur = len(raw)
-        targets: list[int] = []
-        seen: set[int] = set()
-        for t in (preferred_stream, *CARD_PATCH_STREAM_ALTERNATES, cur):
-            if t is None or t in seen:
-                continue
-            seen.add(t)
-            targets.append(t)
-
-        for stream_target in targets:
-            new_raw = _recompress_padded(dec, stream_target)
-            if new_raw is None:
-                new_raw = recompress_to_size(dec, stream_target, max_pad=8192)
-            if new_raw is None:
-                continue
-            trial = bytearray(data)
-            span = _StreamSpan(m.start(), m.start(2), m.end(2), raw)
-            _patch_stream_span(trial, span, new_raw)
-            delta = len(trial) - len(data)
-            if delta:
-                _update_stream_length(trial, m.start(2), len(new_raw))
-                _fix_xref_offsets(trial, m.start(2), delta)
-            if fit_pdf_to_target(trial, target_size):
-                data[:] = trial
-                return True
-        return False
+    recompressed = recompress_card_preserving_dec(
+        zlib.decompress(main_span.raw),
+        len(main_span.raw),
+        template_dec=template_dec,
+    )
+    if recompressed is None:
+        return fit_pdf_to_target(data, target_size)
+    new_raw, _target = recompressed
+    trial = bytearray(data)
+    _patch_stream_span(trial, main_span, new_raw)
+    delta = len(trial) - len(data)
+    if delta:
+        _update_stream_length(trial, main_span.content_start, len(new_raw))
+        _fix_xref_offsets(trial, main_span.content_start, delta)
+    if fit_pdf_to_target(trial, target_size):
+        data[:] = trial
+        return True
     return False
 
 

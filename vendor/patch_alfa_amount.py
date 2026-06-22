@@ -33,6 +33,7 @@ import subprocess
 import sys
 import zlib
 from dataclasses import dataclass, field, replace
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -1089,53 +1090,101 @@ def recompress_card_preserving_dec(
     target_compressed: int,
     *,
     template_dec: bytes,
-    deep_search: bool = False,
-) -> bytes | None:
+) -> tuple[bytes, int] | None:
     """
-    Сжимает content stream карта→карта в target_compressed байт без изменения len(dec).
+    Сжимает content stream карта→карта, сохраняя len(dec).
 
-    onlypdf_robot сверяет статические регионы потока — нельзя дописывать \\n%% после ET.
+    Как у СБП: перебор level + padding в slack + близкие размеры zlib (811±5).
     """
     target_len = len(template_dec)
     slack_start = _card_stream_slack_start(template_dec)
     filler = template_dec[slack_start:]
     body = _normalize_card_dec_length(dec, target_len, slack_start, filler=filler)
+    targets = _card_zlib_targets(target_compressed)
 
-    for level in range(10):
-        c = zlib.compress(body, level)
-        if len(c) == target_compressed:
-            return c
+    hit = _card_try_zlib_targets(body, targets)
+    if hit is not None:
+        return hit
 
     base = bytearray(body)
-    slack_len = target_len - slack_start
-    if slack_len <= 0:
-        return None
+    slack_end = len(body)
 
-    # Однобайтовые мутации в slack (без изменения len(dec))
-    for idx in range(slack_len):
-        orig_b = base[slack_start + idx]
-        for val in (0x20, 0x25, 0x0A, 0x0D, 0xFF, 0x30, 0x2E, 0x0C):
-            if val == orig_b:
+    # Быстрые мутации в slack (последние байты — чаще всего хватает)
+    for pos in range(max(slack_start, slack_end - 8), slack_end):
+        orig = base[pos]
+        for val in (0x25, 0x20, 0x0A, 0x0D, 0xFF, 0x30, 0x0C, 0x2E, 0x35):
+            if val == orig:
                 continue
-            trial = bytearray(base)
-            trial[slack_start + idx] = val
-            for level in range(10):
-                c = zlib.compress(bytes(trial), level)
-                if len(c) == target_compressed:
-                    return c
+            trial = bytes(base[:pos] + bytes([val]) + base[pos + 1 :])
+            hit = _card_try_zlib_targets(trial, targets)
+            if hit is not None:
+                return hit
 
-    # Перебор хвоста slack (2 байта)
-    if slack_len >= 2:
-        tail = slack_start + slack_len - 2
-        for a in range(256):
-            for b in range(256):
-                trial = bytearray(base)
-                trial[tail : tail + 2] = bytes((a, b))
-                for level in range(10):
-                    compressed = zlib.compress(bytes(trial), level)
-                    if len(compressed) == target_compressed:
-                        return compressed
+    slack_len = slack_end - slack_start
+    for pct in range(1, min(slack_len, 12) + 1):
+        trial = bytearray(base)
+        trial[slack_start : slack_start + pct] = b"%" * pct
+        hit = _card_try_zlib_targets(bytes(trial), targets)
+        if hit is not None:
+            return hit
+
+    # Полный перебор 0–255 по последним байтам slack (быстро, без 256²)
+    for pos in range(max(slack_start, slack_end - 6), slack_end):
+        for val in range(256):
+            trial = bytearray(base)
+            trial[pos] = val
+            hit = _card_try_zlib_targets(bytes(trial), targets)
+            if hit is not None:
+                return hit
+
     return None
+
+
+@lru_cache(maxsize=2048)
+def _zlib_compress_to_target(body: bytes, target: int) -> bytes | None:
+    for level in range(10):
+        c = zlib.compress(body, level)
+        if len(c) == target:
+            return c
+    return None
+
+
+def _card_zlib_targets(preferred: int) -> tuple[int, ...]:
+    seen: set[int] = set()
+    ordered: list[int] = []
+    for delta in CARD_ZLIB_SIZE_ALTERNATES:
+        size = preferred + delta
+        if size > 0 and size not in seen:
+            seen.add(size)
+            ordered.append(size)
+    return tuple(ordered)
+
+
+def _card_try_zlib_targets(
+    body: bytes, targets: tuple[int, ...]
+) -> tuple[bytes, int] | None:
+    for target in targets:
+        compressed = _zlib_compress_to_target(body, target)
+        if compressed is not None:
+            return compressed, target
+    return None
+
+
+def warm_card_zlib_cache(template_pdf: str | Path) -> None:
+    """Прогрев LRU-кэша zlib для шаблона карта→карта (ускоряет повторные патчи)."""
+    src = Path(template_pdf)
+    if not src.is_file():
+        return
+    for m in STREAM_RE.finditer(src.read_bytes()):
+        if len(m.group(2)) != CARD_ORIGINAL_CONTENT_STREAM:
+            continue
+        try:
+            dec = zlib.decompress(m.group(2))
+        except zlib.error:
+            break
+        for target in _card_zlib_targets(CARD_ORIGINAL_CONTENT_STREAM):
+            _zlib_compress_to_target(dec, target)
+        break
 
 
 def _replace_hex_at_tj_anchors(
@@ -1268,18 +1317,21 @@ def patch_cid_zlib_streams_multi(
 
         hits += stream_hits
         if preserve_stream_size and receipt_template == "card" and card_template_dec is not None:
-            new_stream = recompress_card_preserving_dec(
+            recompressed = recompress_card_preserving_dec(
                 new_dec,
                 len(stream_raw),
                 template_dec=card_template_dec,
             )
-            if new_stream is None:
+            if recompressed is None:
                 raise AmountPatchError(
                     "Карта→карта: не удалось сжать content stream без изменения "
-                    f"len(dec)={len(card_template_dec)} → zlib {len(stream_raw)} байт. "
+                    f"len(dec)={len(card_template_dec)} → zlib ~{len(stream_raw)} байт. "
                     "onlypdf_robot отклонит чек (целостность PDF)."
                 )
-            if mode != "length_xref":
+            new_stream, _stream_target = recompressed
+            if len(new_stream) != len(stream_raw):
+                mode = "length_xref"
+            elif mode != "length_xref":
                 mode = "in_place"
         elif preserve_stream_size:
             patched = recompress_patched_stream(new_dec, len(stream_raw))
@@ -1689,9 +1741,10 @@ def replace_fields_in_pdf(
             fit_pdf_to_target(original, MAX_PDF_BYTES)
     else:
         if receipt_template == "card" and is_card_bot_safe_template(src):
-            from font_extend import fit_card_bot_pass_pdf
+            if len(original) != original_size:
+                from font_extend import fit_card_bot_pass_pdf
 
-            fit_card_bot_pass_pdf(original, target_size=original_size)
+                fit_card_bot_pass_pdf(original, target_size=original_size)
         elif not allow_variable_length:
             fit_pdf_to_target(original, original_size)
     dst.write_bytes(original)
@@ -1944,6 +1997,8 @@ CARD_PREEXPAND_FILE_SIZE = 56_139
 CARD_PREEXPAND_CONTENT_STREAM = 816
 # Патч полей: ±5 байт от 55919.
 CARD_PATCH_MAX_SIZE_DELTA = 5
+# Допустимые размеры zlib-потока (как recompress_patched_stream у СБП).
+CARD_ZLIB_SIZE_ALTERNATES = (0, -1, 1, -2, 2, -3, 3)
 # Перевод на счёт в другой банк: subset с полными цифрами 0–9 (в т.ч. «8»).
 ACCOUNT_BOT_SAFE_FONT_MARKER = "VQWVIK"
 ACCOUNT_BOT_SAFE_CMAP_MAX = 72
@@ -2020,15 +2075,20 @@ def has_all_receipt_digits(unicode_to_cid: dict[str, str]) -> bool:
 
 
 def card_patch_stream_size(data: bytes) -> int | None:
-    """Размер zlib content stream с Tj (карта→карта)."""
+    """Размер zlib content stream с Tj (карта→карта, основной поток 811)."""
+    fallback: int | None = None
     for m in STREAM_RE.finditer(data):
         raw = m.group(2)
         try:
-            if b"Tj" in zlib.decompress(raw):
-                return len(raw)
+            if b"Tj" not in zlib.decompress(raw):
+                continue
         except zlib.error:
             continue
-    return None
+        if len(raw) == CARD_ORIGINAL_CONTENT_STREAM:
+            return len(raw)
+        if fallback is None or len(raw) > fallback:
+            fallback = len(raw)
+    return fallback
 
 
 def ensure_card_template_preexpanded(
@@ -2669,16 +2729,16 @@ def prepare_card_wide_amount_template(
         slack_start=slack_start,
         filler=template_dec[slack_start:],
     )
-    new_raw_z = recompress_card_preserving_dec(
+    recompressed = recompress_card_preserving_dec(
         patched_dec,
         len(stream_span[2]),
         template_dec=template_dec,
-        deep_search=True,
     )
-    if new_raw_z is None:
+    if recompressed is None:
         raise AmountPatchError(
             "Не удалось сжать content stream после расширения слота суммы."
         )
+    new_raw_z, _stream_target = recompressed
 
     start, end, _old = stream_span
     delta = len(new_raw_z) - (end - start)
