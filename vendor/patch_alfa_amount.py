@@ -485,9 +485,13 @@ def format_text_like(new_value: str, template: str) -> str:
 def format_field_value(field_id: str, value: Any, template: str) -> str:
     """Форматирует значение поля под шаблон исходного текста."""
     if field_id == "recipient_name":
-        return format_recipient_name(
-            str(value), template, max_len=SBP_RECIPIENT_NAME_MAX_LEN
+        # СБП: до 21 символа; «перевод на счёт»: ширина слота в шаблоне (23+).
+        name_max = (
+            len(template)
+            if len(template) > SBP_RECIPIENT_NAME_MAX_LEN
+            else SBP_RECIPIENT_NAME_MAX_LEN
         )
+        return format_recipient_name(str(value), template, max_len=name_max)
     if field_id == "payer_name":
         return format_recipient_name(str(value), template)
     if field_id in PADDED_CARD_FIELDS:
@@ -2030,8 +2034,8 @@ CARD_LEGACY_FONT_FILE2_EXACT = 17_584
 CARD_LEGACY_GLYPH_COUNT = 56
 CARD_PREEXPAND_FILE_SIZE = 56_139
 CARD_PREEXPAND_CONTENT_STREAM = 816
-# Патч полей: ±5 байт от 55919.
-CARD_PATCH_MAX_SIZE_DELTA = 5
+# Патч полей: ±8 байт от 55919 (zlib-поток может вырасти до 811+8).
+CARD_PATCH_MAX_SIZE_DELTA = 8
 # Допустимые размеры zlib-потока: 811±8 (worst-case патчи дают min ~815).
 CARD_ZLIB_SIZE_ALTERNATES = (0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5, -6, 6, -7, 7, 8, -8)
 # Перевод на счёт в другой банк: subset с полными цифрами 0–9 (в т.ч. «8»).

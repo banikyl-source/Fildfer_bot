@@ -927,10 +927,12 @@ def fit_card_bot_pass_pdf(
     """
     from patch_alfa_amount import (
         CARD_ORIGINAL_CONTENT_STREAM,
+        card_patch_stream_size,
         recompress_card_preserving_dec,
     )
 
     file_data = bytes(data)
+    stream_len = card_patch_stream_size(file_data) or preferred_stream
     template_dec: bytes | None = None
     main_span: _StreamSpan | None = None
     for m in STREAM_RE.finditer(file_data):
@@ -941,10 +943,11 @@ def fit_card_bot_pass_pdf(
             continue
         if b"Tj" not in dec or len(dec) >= 20_000:
             continue
-        if len(raw) == CARD_ORIGINAL_CONTENT_STREAM:
-            template_dec = dec
-            main_span = _StreamSpan(m.start(), m.start(2), m.end(2), raw)
-            break
+        if stream_len is not None and len(raw) != stream_len:
+            continue
+        template_dec = dec
+        main_span = _StreamSpan(m.start(), m.start(2), m.end(2), raw)
+        break
     if template_dec is None or main_span is None:
         return fit_pdf_to_target(data, target_size)
 
