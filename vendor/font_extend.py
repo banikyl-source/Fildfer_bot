@@ -28,6 +28,8 @@ from patch_alfa_amount import (
     AmountPatchError,
     CARD_BOT_SAFE_CONTENT_STREAM,
     CARD_BOT_SAFE_FILE_SIZE,
+    CARD_ORIGINAL_CONTENT_STREAM,
+    CARD_ORIGINAL_FILE_SIZE,
 )
 
 _MODULE_DIR = Path(__file__).resolve().parent
@@ -890,12 +892,12 @@ def _patch_font_streams_in_bytes(
         _remap_cids_in_pdf_streams(data, cid_remap)
 
 
-CARD_PATCH_STREAM_TARGET = 816
-# Эталонный zlib-поток полей (pdf 999.pdf).
-CARD_CONTENT_STREAM_ORIGINAL = CARD_BOT_SAFE_CONTENT_STREAM
+CARD_PATCH_STREAM_TARGET = CARD_ORIGINAL_CONTENT_STREAM
+# Эталонный zlib-поток полей (pdf 999.pdf): 811 байт.
+CARD_CONTENT_STREAM_ORIGINAL = CARD_ORIGINAL_CONTENT_STREAM
 CARD_PATCH_STREAM_ALTERNATES = tuple(
-    CARD_BOT_SAFE_CONTENT_STREAM + d
-    for d in (0, -1, 1, 5, -2, 2, -3, 3, 4, -4, -5, 5, 6, -6)
+    CARD_ORIGINAL_CONTENT_STREAM + d
+    for d in (0, -1, 1, -2, 2, -3, 3, 4, -4, 5, -5)
 )
 
 
@@ -917,8 +919,8 @@ def _recompress_padded(dec: bytes, target: int) -> bytes | None:
 def fit_card_bot_pass_pdf(
     data: bytearray,
     *,
-    target_size: int = CARD_BOT_SAFE_FILE_SIZE,
-    preferred_stream: int | None = CARD_CONTENT_STREAM_ORIGINAL,
+    target_size: int = CARD_ORIGINAL_FILE_SIZE,
+    preferred_stream: int | None = CARD_ORIGINAL_CONTENT_STREAM,
 ) -> bool:
     """
     Подгоняет карта→карта PDF к размеру оригинала (pdf 999.pdf).

@@ -262,8 +262,8 @@ def find_alfa_card_template() -> Path:
     from patch_alfa_amount import AmountPatchError, resolve_card_bot_pass_template
 
     preferred = (
-        DEFAULT_ALFA_CARD_TEMPLATE,
         DESKTOP / "pdf 999.pdf",
+        DEFAULT_ALFA_CARD_TEMPLATE,
         DESKTOP / "PROHOD_CARD_FIXED1.pdf",
     )
     for candidate in preferred:
@@ -337,7 +337,7 @@ def _render_alfa_pdf(
         ACCOUNT_BOT_SAFE_FONT_FILE2_EXACT,
         ACCOUNT_BOT_SAFE_GLYPH_COUNT,
         AmountPatchError,
-        CARD_BOT_SAFE_FILE_SIZE,
+        CARD_ORIGINAL_FILE_SIZE,
         CARD_BOT_SAFE_FONT_FILE2_EXACT,
         CARD_BOT_SAFE_GLYPH_COUNT,
         CARD_PATCH_MAX_SIZE_DELTA,
@@ -401,7 +401,7 @@ def _render_alfa_pdf(
             out_path.write_bytes(out_data)
             out_size = out_path.stat().st_size
             expected_size = (
-                CARD_BOT_SAFE_FILE_SIZE if card else template_size
+                CARD_ORIGINAL_FILE_SIZE if card else template_size
             )
             if card and out_size != expected_size and abs(out_size - expected_size) > CARD_PATCH_MAX_SIZE_DELTA:
                 raise AmountPatchError(

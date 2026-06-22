@@ -871,16 +871,29 @@ def find_cid_amount_match(pdf_path: Path, data: bytes) -> AmountMatch:
     )
 
 
-def recompress_to_size(dec: bytes, target: int, *, max_pad: int = 4096) -> bytes | None:
+def recompress_to_size(
+    dec: bytes,
+    target: int,
+    *,
+    max_pad: int = 4096,
+    pad_after_et_only: bool = False,
+    card_binary_pad: bool = False,
+) -> bytes | None:
     """Подбирает zlib-сжатие того же размера, что и оригинальный поток."""
     for level in range(10):
         c = zlib.compress(dec, level)
         if len(c) == target:
             return c
+    body, padding = _split_card_stream_padding(dec)
+    pad_trials: list[bytes] = []
     for pad in range(1, max_pad + 1):
-        suffix = b"\n%" + (b"%" * pad)
+        pad_trials.append(b"\n%" + (b"%" * pad))
+        if card_binary_pad:
+            pad_trials.append(b"\xff" * pad)
+    for suffix in pad_trials:
+        trial = (body + padding + suffix) if pad_after_et_only else (dec + suffix)
         for level in range(10):
-            c = zlib.compress(dec + suffix, level)
+            c = zlib.compress(trial, level)
             if len(c) == target:
                 return c
     return None
@@ -891,15 +904,28 @@ def recompress_patched_stream(
     target: int,
     *,
     max_growth: int = 8,
+    max_shrink: int = 4,
+    pad_after_et_only: bool = True,
 ) -> tuple[bytes, int] | None:
     """
-    Сжимает патченный content stream, допуская небольшой рост.
+    Сжимает патченный content stream карта→карта.
 
-    После замены нескольких CID-полей zlib часто не попадает в исходные
-    794 байта; ближайший размер (799 и т.п.) даёт PDF +5 байт — бот принимает.
+    Сначала ищет размер без %-паддинга в теле потока; паддинг только после ET.
     """
-    for size in range(target, target + max_growth + 1):
-        found = recompress_to_size(dec, size)
+    sizes: list[int] = []
+    seen: set[int] = set()
+    for size in range(target - max_shrink, target + max_growth + 1):
+        if size > 0 and size not in seen:
+            seen.add(size)
+            sizes.append(size)
+    for size in sizes:
+        found = recompress_to_size(
+            dec,
+            size,
+            max_pad=512 if pad_after_et_only else 4096,
+            pad_after_et_only=pad_after_et_only,
+            card_binary_pad=True,
+        )
         if found is not None:
             return found, size
     return None
@@ -972,12 +998,191 @@ def _split_card_stream_padding(dec: bytes) -> tuple[bytes, bytes]:
     return dec, b""
 
 
+CARD_SLACK_SUFFIX = b"\n0 0 0 RG\r\n0 0 0 rg\r\nBT\r\n/F1 12 Tf\r\nET\r\n"
+
+
+def _card_stream_slack_start(dec: bytes) -> int:
+    """Начало съёмного хвоста content stream (пустой BT/ET-блок в конце)."""
+    if dec.endswith(CARD_SLACK_SUFFIX):
+        return len(dec) - len(CARD_SLACK_SUFFIX)
+    marker = b"BT\r\n/F1 12 Tf\r\nET\r\n"
+    pos = dec.rfind(marker)
+    if pos >= 0 and pos + len(marker) == len(dec):
+        return pos
+    return max(0, len(dec) - 40)
+
+
+def _normalize_card_dec_length(
+    dec: bytes,
+    target_len: int,
+    slack_start: int,
+    *,
+    filler: bytes | None = None,
+) -> bytes:
+    """Подгоняет dec под эталонную длину, забирая/добавляя байты только из slack-хвоста."""
+    out = bytearray(dec)
+    delta = len(out) - target_len
+    if delta == 0:
+        return dec
+    if delta > 0:
+        if slack_start + delta > len(out):
+            raise AmountPatchError(
+                f"Карта→карта: не хватает slack в потоке ({delta} байт, "
+                f"slack с {slack_start})."
+            )
+        del out[slack_start : slack_start + delta]
+        return bytes(out)
+    need = -delta
+    fill = (filler or CARD_SLACK_SUFFIX)[-need:] if filler else b" " * need
+    if len(fill) < need:
+        fill = fill + b" " * (need - len(fill))
+    out[slack_start:slack_start] = fill[:need]
+    if len(out) != target_len:
+        raise AmountPatchError(
+            f"Карта→карта: dec {len(out)} байт после normalize, нужно {target_len}."
+        )
+    return bytes(out)
+
+
+def _replace_card_fields_preserving_len(
+    dec: bytes,
+    field_patches: list[tuple[float, float, bytes, bytes]],
+    *,
+    target_len: int,
+    slack_start: int,
+    filler: bytes | None = None,
+) -> bytes:
+    """Заменяет hex в Tj-полях карта→карта по координатам Tm, сохраняя len(dec)."""
+    active = [(x, y, o, n) for x, y, o, n in field_patches if o != n]
+    if not active:
+        return dec
+    spans: list[tuple[int, int, bytes]] = []
+    for x, y, want_old, new_hex in active:
+        matched = False
+        for tm in TJ_AT_POS_RE.finditer(dec):
+            if abs(float(tm.group(1)) - x) >= 0.01:
+                continue
+            if abs(float(tm.group(2)) - y) >= 0.01:
+                continue
+            old_hex = tm.group(3)
+            if old_hex != want_old:
+                raise AmountPatchError(
+                    f"Карта→карта: hex на ({x},{y}) не совпадает с шаблоном."
+                )
+            spans.append((tm.start(3), tm.end(3), new_hex))
+            matched = True
+            break
+        if not matched:
+            raise AmountPatchError(
+                f"Карта→карта: поле на ({x},{y}) не найдено в content stream."
+            )
+    buf = bytearray(dec)
+    for start, end, new_hex in sorted(spans, key=lambda s: s[0], reverse=True):
+        buf[start:end] = new_hex
+    return _normalize_card_dec_length(
+        bytes(buf), target_len, slack_start, filler=filler
+    )
+
+
+def recompress_card_preserving_dec(
+    dec: bytes,
+    target_compressed: int,
+    *,
+    template_dec: bytes,
+    deep_search: bool = False,
+) -> bytes | None:
+    """
+    Сжимает content stream карта→карта в target_compressed байт без изменения len(dec).
+
+    onlypdf_robot сверяет статические регионы потока — нельзя дописывать \\n%% после ET.
+    """
+    target_len = len(template_dec)
+    slack_start = _card_stream_slack_start(template_dec)
+    filler = template_dec[slack_start:]
+    body = _normalize_card_dec_length(dec, target_len, slack_start, filler=filler)
+
+    for level in range(10):
+        c = zlib.compress(body, level)
+        if len(c) == target_compressed:
+            return c
+
+    base = bytearray(body)
+    slack_len = target_len - slack_start
+    if slack_len <= 0:
+        return None
+
+    # Однобайтовые мутации в slack (без изменения len(dec))
+    for idx in range(slack_len):
+        orig_b = base[slack_start + idx]
+        for val in (0x20, 0x25, 0x0A, 0x0D, 0xFF, 0x30, 0x2E, 0x0C):
+            if val == orig_b:
+                continue
+            trial = bytearray(base)
+            trial[slack_start + idx] = val
+            for level in range(10):
+                c = zlib.compress(bytes(trial), level)
+                if len(c) == target_compressed:
+                    return c
+
+    # Перебор хвоста slack (2 байта)
+    if slack_len >= 2:
+        tail = slack_start + slack_len - 2
+        for a in range(256):
+            for b in range(256):
+                trial = bytearray(base)
+                trial[tail : tail + 2] = bytes((a, b))
+                for level in range(10):
+                    compressed = zlib.compress(bytes(trial), level)
+                    if len(compressed) == target_compressed:
+                        return compressed
+    return None
+
+
+def _replace_hex_at_tj_anchors(
+    dec: bytes,
+    replacements: list[tuple[bytes, bytes]],
+    *,
+    anchors: dict[str, tuple[float, float]] | None = None,
+) -> bytes | None:
+    """
+    Заменяет hex в Tj-полях по координатам Tm (с конца потока).
+
+    Не трогает случайные вхождения тех же байт вне полей.
+    """
+    if not replacements:
+        return dec
+    field_anchors = anchors or FIELD_ANCHORS_CARD
+    spans: list[tuple[int, int, bytes]] = []
+    for tm in TJ_AT_POS_RE.finditer(dec):
+        x = float(tm.group(1))
+        y = float(tm.group(2))
+        field_id = _classify_field(y, x, field_anchors)
+        if field_id is None:
+            continue
+        old_hex = tm.group(3)
+        for want_old, new_hex in replacements:
+            if want_old == new_hex:
+                continue
+            if old_hex == want_old:
+                spans.append((tm.start(3), tm.end(3), new_hex))
+                break
+    if len(spans) != sum(1 for o, n in replacements if o != n):
+        return None
+    out = bytearray(dec)
+    for start, end, new_hex in sorted(spans, key=lambda s: s[0], reverse=True):
+        out[start:end] = new_hex
+    return bytes(out)
+
+
 def patch_cid_zlib_streams_multi(
     data: bytearray,
     replacements: list[tuple[bytes, bytes]],
     *,
     allow_variable_length: bool = False,
     preserve_stream_size: bool = False,
+    receipt_template: str | None = None,
+    card_template_dec: bytes | None = None,
+    card_field_patches: list[tuple[float, float, bytes, bytes]] | None = None,
 ) -> str:
     """Заменяет несколько CID hex в zlib-потоке за один проход."""
     if not replacements:
@@ -1011,12 +1216,35 @@ def patch_cid_zlib_streams_multi(
 
         new_dec = dec
         stream_hits = 0
-        for old_hex, new_hex in replacements:
-            if old_hex == new_hex:
-                continue
-            if old_hex in new_dec:
-                new_dec = new_dec.replace(old_hex, new_hex, 1)
-                stream_hits += 1
+        card_slack_filler: bytes | None = None
+        is_card_main = (
+            receipt_template == "card"
+            and card_template_dec is not None
+            and len(dec) == len(card_template_dec)
+            and len(stream_raw) == CARD_ORIGINAL_CONTENT_STREAM
+        )
+        if is_card_main and card_field_patches:
+            slack_start = _card_stream_slack_start(card_template_dec)
+            card_slack_filler = card_template_dec[slack_start:]
+            new_dec = _replace_card_fields_preserving_len(
+                dec,
+                card_field_patches,
+                target_len=len(card_template_dec),
+                slack_start=slack_start,
+                filler=card_slack_filler,
+            )
+            stream_hits = len([p for p in card_field_patches if p[2] != p[3]])
+        elif receipt_template == "card" and card_field_patches:
+            out.extend(m.group(0))
+            pos = m.end()
+            continue
+        if stream_hits == 0:
+            for old_hex, new_hex in replacements:
+                if old_hex == new_hex:
+                    continue
+                if old_hex in new_dec:
+                    new_dec = new_dec.replace(old_hex, new_hex, 1)
+                    stream_hits += 1
 
         if stream_hits == 0:
             out.extend(m.group(0))
@@ -1025,12 +1253,35 @@ def patch_cid_zlib_streams_multi(
 
         body, padding = _split_card_stream_padding(new_dec)
         orig_body, orig_padding = _split_card_stream_padding(dec)
-        if not padding and orig_padding:
-            padding = orig_padding
-        new_dec = body + padding
+        if receipt_template != "card" or card_template_dec is None:
+            if not padding and orig_padding:
+                padding = orig_padding
+            new_dec = body + padding
+        elif len(new_dec) != len(card_template_dec):
+            slack_start = _card_stream_slack_start(card_template_dec)
+            new_dec = _normalize_card_dec_length(
+                new_dec,
+                len(card_template_dec),
+                slack_start,
+                filler=card_slack_filler,
+            )
 
         hits += stream_hits
-        if preserve_stream_size:
+        if preserve_stream_size and receipt_template == "card" and card_template_dec is not None:
+            new_stream = recompress_card_preserving_dec(
+                new_dec,
+                len(stream_raw),
+                template_dec=card_template_dec,
+            )
+            if new_stream is None:
+                raise AmountPatchError(
+                    "Карта→карта: не удалось сжать content stream без изменения "
+                    f"len(dec)={len(card_template_dec)} → zlib {len(stream_raw)} байт. "
+                    "onlypdf_robot отклонит чек (целостность PDF)."
+                )
+            if mode != "length_xref":
+                mode = "in_place"
+        elif preserve_stream_size:
             patched = recompress_patched_stream(new_dec, len(stream_raw))
             if patched is None:
                 new_stream = zlib.compress(new_dec, 9)
@@ -1042,7 +1293,9 @@ def patch_cid_zlib_streams_multi(
                 elif mode != "length_xref":
                     mode = "in_place"
         else:
-            new_stream = recompress_to_size(new_dec, len(stream_raw), max_pad=64)
+            new_stream = recompress_to_size(
+                new_dec, len(stream_raw), max_pad=64, card_binary_pad=True
+            )
             if new_stream is None:
                 new_stream = zlib.compress(new_dec, 9)
                 mode = "length_xref"
@@ -1386,6 +1639,27 @@ def replace_fields_in_pdf(
             "qpdf_ok": None,
         }
 
+    card_template_dec: bytes | None = None
+    if receipt_template == "card" and is_card_bot_safe_template(src):
+        for sm in STREAM_RE.finditer(bytes(original)):
+            try:
+                candidate = zlib.decompress(sm.group(2))
+            except zlib.error:
+                continue
+            if b"Tj" not in candidate or len(candidate) >= 20_000:
+                continue
+            if len(sm.group(2)) == CARD_ORIGINAL_CONTENT_STREAM:
+                card_template_dec = candidate
+                break
+            if card_template_dec is None:
+                card_template_dec = candidate
+
+    card_field_patches: list[tuple[float, float, bytes, bytes]] = []
+    for field_id, fm, new_text in prepared:
+        new_raw = encode_cid_text(new_text, cmap)
+        if new_raw != fm.raw:
+            card_field_patches.append((fm.x, fm.y, fm.raw, new_raw))
+
     patch_mode = patch_cid_zlib_streams_multi(
         original,
         replacements,
@@ -1393,6 +1667,9 @@ def replace_fields_in_pdf(
         preserve_stream_size=(
             receipt_template == "card" and is_card_bot_safe_template(src)
         ),
+        receipt_template=receipt_template,
+        card_template_dec=card_template_dec,
+        card_field_patches=card_field_patches,
     )
 
     font_swapped = False
@@ -1654,6 +1931,7 @@ CARD_BOT_SAFE_FONT_FILE2_EXACT = 16_944
 CARD_BOT_SAFE_GLYPH_COUNT = 54
 CARD_ORIGINAL_FILE_SIZE = 55_919
 CARD_ORIGINAL_CONTENT_STREAM = 811
+# onlypdf_robot сверяет pdf 999.pdf: 55919 байт, zlib-поток 811 (не 55924/816).
 CARD_BOT_SAFE_FILE_SIZE = CARD_ORIGINAL_FILE_SIZE
 CARD_BOT_SAFE_CONTENT_STREAM = CARD_ORIGINAL_CONTENT_STREAM
 # Старый PDF Document.pdf (не проходит бота как эталон).
@@ -2330,6 +2608,113 @@ def _card_template_repair_dest(template: Path) -> Path:
     return template.with_name(f"{template.stem}_digits_fixed{template.suffix}")
 
 
+CARD_WIDE_AMOUNT_VALUE = 8888
+# Сумма в шаблоне после prepare: «8 888 RUR» (40 hex) — in-place до 5 цифр grouped.
+CARD_WIDE_AMOUNT_MIN_HEX = 40
+
+
+def prepare_card_wide_amount_template(
+    input_pdf: str | Path,
+    output_pdf: str | Path,
+) -> Path:
+    """
+    Расширяет слот суммы in-place: «10 RUR» (28 hex) → «8 888 RUR» (40 hex).
+
+    Забирает байты из slack-хвоста потока — len(dec) остаётся 4152, файл 55919/811.
+    """
+    src = Path(input_pdf)
+    dst = Path(output_pdf)
+    if not src.is_file():
+        raise AmountPatchError(f"Файл не найден: {src}")
+
+    disc = discover_fields(src, template="card")
+    amount_fm = disc["amount"]
+    if len(amount_fm.raw) >= CARD_WIDE_AMOUNT_MIN_HEX:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if dst.resolve() != src.resolve():
+            dst.write_bytes(src.read_bytes())
+        return dst
+
+    cmap = load_unicode_to_cid(src)
+    new_text = format_field_value(
+        "amount", CARD_WIDE_AMOUNT_VALUE, amount_fm.text
+    )
+    new_raw = encode_cid_text(new_text, cmap)
+    if len(new_raw) <= len(amount_fm.raw):
+        raise AmountPatchError(
+            f"Сумма {CARD_WIDE_AMOUNT_VALUE} не шире слота шаблона."
+        )
+
+    data = bytearray(src.read_bytes())
+    template_dec: bytes | None = None
+    stream_span: tuple[int, int, bytes] | None = None
+    for m in STREAM_RE.finditer(bytes(data)):
+        raw = m.group(2)
+        try:
+            dec = zlib.decompress(raw)
+        except zlib.error:
+            continue
+        if b"Tj" in dec and len(dec) < 20_000:
+            template_dec = dec
+            stream_span = (m.start(2), m.end(2), raw)
+            break
+    if template_dec is None or stream_span is None:
+        raise AmountPatchError("Content stream карта→карта не найден.")
+
+    slack_start = _card_stream_slack_start(template_dec)
+    patched_dec = _replace_card_fields_preserving_len(
+        template_dec,
+        [(amount_fm.x, amount_fm.y, amount_fm.raw, new_raw)],
+        target_len=len(template_dec),
+        slack_start=slack_start,
+        filler=template_dec[slack_start:],
+    )
+    new_raw_z = recompress_card_preserving_dec(
+        patched_dec,
+        len(stream_span[2]),
+        template_dec=template_dec,
+        deep_search=True,
+    )
+    if new_raw_z is None:
+        raise AmountPatchError(
+            "Не удалось сжать content stream после расширения слота суммы."
+        )
+
+    start, end, _old = stream_span
+    delta = len(new_raw_z) - (end - start)
+    before = len(data[:start])
+    data[start:end] = new_raw_z
+    if delta:
+        _update_stream_length(data, before, len(new_raw_z))
+        _fix_xref_offsets(data, start, delta)
+
+    from font_extend import fit_pdf_to_target
+
+    if not fit_pdf_to_target(data, CARD_BOT_SAFE_FILE_SIZE):
+        raise AmountPatchError(
+            f"Не удалось подогнать {src.name} к {CARD_BOT_SAFE_FILE_SIZE} байт "
+            "после расширения слота суммы."
+        )
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_bytes(data)
+
+    patched = discover_fields(dst, template="card")
+    amt = patched["amount"]
+    if len(amt.raw) < CARD_WIDE_AMOUNT_MIN_HEX:
+        raise AmountPatchError(
+            f"Слот суммы после prepare: {len(amt.raw)} hex, "
+            f"нужно ≥ {CARD_WIDE_AMOUNT_MIN_HEX}."
+        )
+    if card_font_file2_md5(dst) != CARD_ORIGINAL_FONT_FILE2_MD5:
+        raise AmountPatchError("FontFile2 изменился при prepare шаблона карта→карта.")
+    if card_patch_stream_size(dst.read_bytes()) != CARD_ORIGINAL_CONTENT_STREAM:
+        raise AmountPatchError(
+            "Размер zlib-потока изменился после prepare слота суммы."
+        )
+    return dst
+
+
 def build_card_cmap_template(
     input_pdf: str | Path,
     output_pdf: str | Path | None = None,
@@ -2337,8 +2722,8 @@ def build_card_cmap_template(
     """
     Собирает bot-pass шаблон карта→карта.
 
-    pdf 999.pdf уже содержит цифры 0–9 — копируется как есть.
-    Для старых PDF (PDF Document.pdf) добавляет цифры через CMap-only.
+    pdf 999.pdf уже содержит цифры 0–9 — копируется как есть (55919/811).
+    Wide-prepare (55924/816) ломает отпечаток onlypdf_robot («подделка»).
     """
     src = Path(input_pdf)
     if not src.is_file():
@@ -2451,9 +2836,10 @@ def is_card_bot_safe_template(pdf_path: str | Path) -> bool:
     try:
         if CARD_BOT_SAFE_FONT_MARKER not in pdf_base_font_name(src):
             return False
-        if src.stat().st_size != CARD_BOT_SAFE_FILE_SIZE:
+        if src.stat().st_size != CARD_ORIGINAL_FILE_SIZE:
             return False
-        if card_patch_stream_size(src.read_bytes()) != CARD_BOT_SAFE_CONTENT_STREAM:
+        stream = card_patch_stream_size(src.read_bytes())
+        if stream != CARD_ORIGINAL_CONTENT_STREAM:
             return False
         if len(load_unicode_to_cid(src)) > CARD_BOT_SAFE_CMAP_MAX:
             return False
@@ -2495,7 +2881,8 @@ def resolve_card_bot_pass_template(explicit: Path) -> Path:
         )
     raise AmountPatchError(
         f"Шаблон {explicit.name} не подходит для бота.\n"
-        f"Положите оригинал {DEFAULT_CARD_INPUT.name} ({CARD_BOT_SAFE_FILE_SIZE} байт) "
+        f"Положите оригинал {DEFAULT_CARD_INPUT.name} ({CARD_ORIGINAL_FILE_SIZE} байт, "
+        f"stream {CARD_ORIGINAL_CONTENT_STREAM}) "
         "в templates/ как PROHOD_CARD_FIXED1.pdf."
     )
 
