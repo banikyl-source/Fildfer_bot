@@ -1025,24 +1025,41 @@ def _normalize_card_dec_length(
     delta = len(out) - target_len
     if delta == 0:
         return dec
+    # Slack-хвост всегда в конце потока; после variable-length патчей смещается.
+    actual_slack = _card_stream_slack_start(bytes(out))
     if delta > 0:
-        if slack_start + delta > len(out):
+        if actual_slack + delta > len(out):
             raise AmountPatchError(
                 f"Карта→карта: не хватает slack в потоке ({delta} байт, "
-                f"slack с {slack_start})."
+                f"slack с {actual_slack})."
             )
-        del out[slack_start : slack_start + delta]
+        del out[actual_slack : actual_slack + delta]
         return bytes(out)
     need = -delta
     fill = (filler or CARD_SLACK_SUFFIX)[-need:] if filler else b" " * need
     if len(fill) < need:
         fill = fill + b" " * (need - len(fill))
-    out[slack_start:slack_start] = fill[:need]
+    out[actual_slack:actual_slack] = fill[:need]
     if len(out) != target_len:
         raise AmountPatchError(
             f"Карта→карта: dec {len(out)} байт после normalize, нужно {target_len}."
         )
     return bytes(out)
+
+
+def _assert_card_operation_ref_tj(dec: bytes) -> None:
+    """Tj «Номер операции в банке» должен оставаться в потоке после патча."""
+    anchor_y, anchor_x = FIELD_ANCHORS_CARD["operation_ref"]
+    for tm in TJ_AT_POS_RE.finditer(dec):
+        if abs(float(tm.group(1)) - anchor_x) >= 0.01:
+            continue
+        if abs(float(tm.group(2)) - anchor_y) >= 0.01:
+            continue
+        if len(tm.group(3)) >= 8:
+            return
+    raise AmountPatchError(
+        "Карта→карта: «Номер операции в банке» пропал из content stream после патча."
+    )
 
 
 def _replace_card_fields_preserving_len(
@@ -1080,8 +1097,10 @@ def _replace_card_fields_preserving_len(
     buf = bytearray(dec)
     for start, end, new_hex in sorted(spans, key=lambda s: s[0], reverse=True):
         buf[start:end] = new_hex
+    # После variable-length патчей slack смещается — пересчитываем с хвоста потока.
+    actual_slack_start = _card_stream_slack_start(bytes(buf))
     return _normalize_card_dec_length(
-        bytes(buf), target_len, slack_start, filler=filler
+        bytes(buf), target_len, actual_slack_start, filler=filler
     )
 
 
@@ -1327,6 +1346,9 @@ def patch_cid_zlib_streams_multi(
                 slack_start,
                 filler=card_slack_filler,
             )
+
+        if receipt_template == "card" and stream_hits > 0:
+            _assert_card_operation_ref_tj(new_dec)
 
         hits += stream_hits
         if preserve_stream_size and receipt_template == "card" and card_template_dec is not None:
